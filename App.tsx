@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
@@ -491,7 +490,7 @@ const App: React.FC = () => {
             </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-1">Dual Stage: Raw Extraction -&gt; Normalization</p>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-1">Dual Stage: Raw Extraction &rarr; Normalization</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
