@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
-import { exportToExcelMatrix } from './utils/excelExport';
+import { exportToMultiSheetExcel } from './utils/excelExport';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 
@@ -495,8 +495,8 @@ const App: React.FC = () => {
           </div>
           <div className="flex flex-wrap items-center gap-4">
              <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Database</button>
-             <button onClick={() => exportToExcelMatrix(groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[2rem] hover:bg-indigo-700 disabled:opacity-50 font-black text-[13px] shadow-2xl shadow-indigo-100 transition-all uppercase tracking-widest">
-              <Download className="w-5 h-5" /> Xuất Excel (Đã Sắp Xếp)
+             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[2rem] hover:bg-indigo-700 disabled:opacity-50 font-black text-[13px] shadow-2xl shadow-indigo-100 transition-all uppercase tracking-widest">
+              <Download className="w-5 h-5" /> Xuất Báo Cáo (Đa Sheet)
             </button>
           </div>
         </header>
