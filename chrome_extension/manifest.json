@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Super Scraper Connector",
+  "version": "1.0",
+  "description": "Lấy HTML từ trang web và gửi vào Super Scraper Pro",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
