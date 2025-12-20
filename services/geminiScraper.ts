@@ -1,8 +1,14 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProductData } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Hàm khởi tạo AI an toàn, chỉ chạy khi cần dùng
+const getAIClient = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("Chưa cấu hình API Key. Vui lòng kiểm tra biến môi trường.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 // DANH SÁCH TÊN CHUẨN (OFFICIAL DICTIONARY)
 const OFFICIAL_NAMES = [
@@ -159,6 +165,7 @@ const normalizeProductAlgorithm = (rawName: string) => {
 // --- AI LOGIC ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
+  const ai = getAIClient(); // Lazy init
   const prompt = `
     BẠN LÀ DATA NORMALIZER.
     INPUT: Danh sách tên thô.
@@ -193,6 +200,9 @@ export const parseRawProducts = async (
   let retries = 0;
   const maxRetries = 5;
   let currentDelay = 5000;
+
+  // Lazy init AI here
+  const ai = getAIClient();
 
   while (true) {
     try {
@@ -258,7 +268,6 @@ export const parseRawProducts = async (
 };
 
 // --- PHASE 2: NORMALIZATION PROCESS (Code or AI) ---
-// UPDATED: Support onProgress callback
 export const processNormalization = async (
   products: ProductData[],
   method: 'code' | 'ai',
@@ -269,7 +278,6 @@ export const processNormalization = async (
   
   if (method === 'code') {
     // --- CODE MODE (CHUNKING) ---
-    // Mặc dù code chạy nhanh, ta chia nhỏ để UI cập nhật được Progress Bar
     const chunkSize = 50; 
     for (let i = 0; i < products.length; i += chunkSize) {
       const chunk = products.slice(i, i + chunkSize);
@@ -281,13 +289,11 @@ export const processNormalization = async (
       
       resultProducts = [...resultProducts, ...processedChunk];
       
-      // Update progress
       if (onProgress) {
         const percent = Math.round(((i + chunk.length) / products.length) * 100);
         onProgress(percent);
       }
       
-      // Delay cực nhỏ để nhường thread cho UI render
       await delay(10);
     }
     return resultProducts;
@@ -314,15 +320,13 @@ export const processNormalization = async (
         });
         resultProducts = [...resultProducts, ...processedBatch];
         
-        // Update progress
         if (onProgress) {
             const percent = Math.round(((i + batch.length) / products.length) * 100);
             onProgress(percent);
         }
-        await delay(500); // Nghỉ nhẹ
+        await delay(500); 
       } catch (e) {
         console.error("Batch error", e);
-        // Fallback: giữ nguyên raw
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
       }
     }
