@@ -4,8 +4,12 @@ import { ProductData } from "../types";
 // Hàm khởi tạo AI an toàn, chỉ chạy khi cần dùng
 const getAIClient = () => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    throw new Error("Chưa cấu hình API Key. Vui lòng kiểm tra biến môi trường.");
+  if (!apiKey || apiKey.length < 10) {
+    throw new Error(
+      "❌ THIẾU API KEY!\n" +
+      "- Trên Vercel: Vào Settings > Environment Variables > Thêm Key='API_KEY', Value='AIza...' > Sau đó REDEPLOY lại.\n" +
+      "- Dưới Local: Kiểm tra file .env hoặc biến môi trường."
+    );
   }
   return new GoogleGenAI({ apiKey });
 };
