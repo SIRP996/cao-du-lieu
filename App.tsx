@@ -466,7 +466,7 @@ const App: React.FC = () => {
                      <li>Bật chế độ <strong>Developer mode (Chế độ cho nhà phát triển)</strong> ở góc phải.</li>
                      <li>Bấm nút <strong>Load unpacked (Tải tiện ích đã giải nén)</strong>.</li>
                      <li>Chọn folder <code>chrome_extension</code> vừa tạo.</li>
-                     <li>Mở Shopee/Lazada -> Bấm icon Extension -> <strong>"GỬI SANG SUPER SCRAPER"</strong>.</li>
+                     <li>Mở Shopee/Lazada &rarr; Bấm icon Extension &rarr; <strong>"GỬI SANG SUPER SCRAPER"</strong>.</li>
                  </ol>
                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 mt-4 text-xs font-bold text-amber-700">
                      Lưu ý: Tab Web App này phải đang mở sẵn thì Extension mới tìm thấy để gửi dữ liệu.
