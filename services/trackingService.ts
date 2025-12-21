@@ -116,6 +116,7 @@ export const syncScrapedDataToTracking = (
 
     db[productId] = {
         id: productId,
+        projectId: existingProduct?.projectId || 'local_storage', // Default for local storage
         name: name,
         category: category,
         lastUpdated: new Date().toISOString(),

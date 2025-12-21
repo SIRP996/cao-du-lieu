@@ -28,7 +28,16 @@ export enum AppStatus {
   ERROR = 'ERROR'
 }
 
-// --- TRACKING SYSTEM TYPES (NEW) ---
+// --- PROJECT SYSTEM (NEW) ---
+export interface Project {
+  id: string;
+  name: string;
+  userId: string;
+  createdAt: string;
+  productCount: number;
+}
+
+// --- TRACKING SYSTEM TYPES ---
 
 export interface PriceLog {
   time: string; // "00:00", "02:00"...
@@ -49,6 +58,7 @@ export interface TrackingSourceData {
 
 export interface TrackingProduct {
   id: string; // SKU
+  projectId: string; // Link to Project
   name: string;
   category: string;
   lastUpdated: string; // ISO String

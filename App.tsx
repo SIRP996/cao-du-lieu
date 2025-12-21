@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check
 } from 'lucide-react';
-import { ProductData, AppStatus, SourceConfig, TrackingProduct } from './types';
+import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
 import { exportToMultiSheetExcel } from './utils/excelExport';
 
@@ -11,7 +11,7 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts } from './services/firebaseService';
+import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject } from './services/firebaseService';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 
@@ -126,6 +126,12 @@ const ScraperWorkspace: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
+  // Project & Saving State
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
+  const [savingProgress, setSavingProgress] = useState<{current: number, total: number} | null>(null);
+
   // Tracking & Filter State
   const [showTracking, setShowTracking] = useState(false);
   const [trackingData, setTrackingData] = useState<TrackingProduct[]>([]);
@@ -162,6 +168,16 @@ const ScraperWorkspace: React.FC = () => {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Load Projects on Mount
+  useEffect(() => {
+      if (currentUser) {
+          getUserProjects(currentUser.uid).then(projs => {
+              setProjects(projs);
+              if (projs.length > 0) setCurrentProject(projs[0]);
+          });
+      }
+  }, [currentUser]);
 
   // -- EXTENSION LISTENER --
   useEffect(() => {
@@ -204,31 +220,55 @@ const ScraperWorkspace: React.FC = () => {
   }, []);
 
   // -- HANDLERS --
+  const handleCreateProject = async () => {
+      const name = prompt("Nhập tên dự án mới:");
+      if (!name || !currentUser) return;
+      try {
+          const newProj = await createProject(currentUser.uid, name);
+          setProjects(prev => [newProj, ...prev]);
+          setCurrentProject(newProj);
+          typeLog(`[PROJECT] Đã tạo dự án: ${name}`, 'success');
+      } catch (e) {
+          console.error(e);
+          alert("Lỗi tạo dự án");
+      }
+  };
+
   const handleSyncToCloud = async () => {
     if (!currentUser || results.length === 0) return;
-    const rawItems = results.filter(r => r.plCombo === 'Raw');
-    if (rawItems.length > 0) {
-        if(!confirm(`Có ${rawItems.length} sản phẩm chưa được chuẩn hóa tên (Giai đoạn 2). Dữ liệu lịch sử có thể bị phân tán. Bạn có muốn tiếp tục lưu không?`)) return;
+    if (!currentProject) {
+        alert("Vui lòng chọn hoặc tạo DỰ ÁN trước khi lưu!");
+        return;
     }
-    try {
-        setNormalizationStatus(AppStatus.PROCESSING);
-        typeLog(`[CLOUD] Đang đẩy ${results.length} sản phẩm lên Firebase...`, 'system');
-        await saveScrapedDataToFirestore(currentUser.uid, results, sources);
-        typeLog(`[CLOUD] Đã lưu thành công! Chuyển qua tab Theo Dõi Giá để xem lịch sử.`, 'success');
-        alert("Đã lưu dữ liệu vào Cloud thành công!");
-    } catch (error: any) {
+    
+    // Non-blocking save initiation
+    setSavingProgress({ current: 0, total: results.length });
+    typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
+
+    // Async execution
+    saveScrapedDataToFirestore(
+        currentUser.uid, 
+        currentProject.id, 
+        results, 
+        sources,
+        (current, total) => {
+             setSavingProgress({ current, total });
+        }
+    ).then(() => {
+        typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
+        setSavingProgress(null);
+    }).catch((error: any) => {
         typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
-        console.error(error);
-    } finally {
-        setNormalizationStatus(AppStatus.IDLE);
-    }
+        setSavingProgress(null);
+    });
   };
 
   const loadTrackingData = async () => {
       if (!currentUser) return;
       setIsLoadingTracking(true);
       try {
-          const data = await getTrackedProducts(currentUser.uid);
+          // Chỉ load sản phẩm của dự án hiện tại (nếu có chọn) hoặc tất cả
+          const data = await getTrackedProducts(currentUser.uid, currentProject?.id);
           setTrackingData(data);
       } catch (error) {
           console.error("Failed to load tracking data", error);
@@ -430,7 +470,39 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* GLOBAL LOADING OVERLAY */}
+      {/* SAVING PROGRESS TOAST (Fixed Bottom Right) */}
+      {savingProgress && (
+          <div className="fixed bottom-6 right-6 z-[1000] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300">
+              <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                      <div className="relative">
+                          <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
+                          <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
+                              <UploadCloud className="w-5 h-5" />
+                          </div>
+                      </div>
+                      <div>
+                          <h4 className="text-sm font-black text-slate-800">Đang đồng bộ...</h4>
+                          <p className="text-[10px] text-slate-500 font-bold">Dự án: {currentProject?.name}</p>
+                      </div>
+                  </div>
+                  <Loader2 className="w-4 h-4 text-slate-300 animate-spin" />
+              </div>
+              
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
+                  ></div>
+              </div>
+              <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                  <span>Tiến độ</span>
+                  <span>{savingProgress.current} / {savingProgress.total}</span>
+              </div>
+          </div>
+      )}
+
+      {/* GLOBAL LOADING OVERLAY (Only for Normalization) */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -438,12 +510,12 @@ const ScraperWorkspace: React.FC = () => {
                  <div className="absolute inset-0 border-8 border-indigo-100 rounded-full"></div>
                  <div className="absolute inset-0 border-8 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
                  <div className="absolute inset-0 flex items-center justify-center">
-                    <UploadCloud className="w-12 h-12 text-indigo-600 animate-bounce" />
+                    <BrainCircuit className="w-12 h-12 text-indigo-600 animate-pulse" />
                  </div>
               </div>
               <div>
-                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang đồng bộ...</h3>
-                 <p className="text-slate-500 font-bold mt-2">Dữ liệu đang được đẩy lên Firebase</p>
+                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang tối ưu hóa...</h3>
+                 <p className="text-slate-500 font-bold mt-2">AI đang phân tích và chuẩn hóa dữ liệu</p>
               </div>
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto overflow-hidden">
                    <div className="h-full bg-indigo-600 animate-progress"></div>
@@ -517,7 +589,42 @@ const ScraperWorkspace: React.FC = () => {
             </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-1">Dual Stage: Raw Extraction &rarr; Normalization</p>
+              <div className="flex items-center gap-2 mt-2">
+                  {/* PROJECT SELECTOR */}
+                  <div className="relative">
+                      <button 
+                        onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
+                        className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors"
+                      >
+                         <FolderOpen className="w-3 h-3" />
+                         {currentProject ? currentProject.name : "Chưa chọn dự án"}
+                         <ChevronDown className="w-3 h-3" />
+                      </button>
+
+                      {isProjectDropdownOpen && (
+                          <div className="absolute top-full left-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 p-2 z-50 animate-in zoom-in-95 duration-200">
+                              <div className="text-[10px] font-bold text-slate-400 px-3 py-2 uppercase tracking-widest">Danh sách dự án</div>
+                              {projects.map(p => (
+                                  <div 
+                                    key={p.id}
+                                    onClick={() => { setCurrentProject(p); setIsProjectDropdownOpen(false); }}
+                                    className={`flex items-center justify-between p-3 rounded-xl cursor-pointer text-xs font-bold ${currentProject?.id === p.id ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}
+                                  >
+                                      {p.name}
+                                      {currentProject?.id === p.id && <Check className="w-3 h-3" />}
+                                  </div>
+                              ))}
+                              <div className="h-px bg-slate-100 my-2"></div>
+                              <button 
+                                onClick={() => { handleCreateProject(); setIsProjectDropdownOpen(false); }}
+                                className="w-full flex items-center gap-2 p-3 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
+                              >
+                                  <FolderPlus className="w-3 h-3" /> Tạo Dự Án Mới
+                              </button>
+                          </div>
+                      )}
+                  </div>
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -653,11 +760,11 @@ const ScraperWorkspace: React.FC = () => {
             <div className="flex items-center gap-3">
                <button 
                   onClick={handleSyncToCloud}
-                  disabled={results.length === 0}
+                  disabled={results.length === 0 || savingProgress !== null}
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
                    <UploadCloud className="w-4 h-4"/>
-                   Lưu vào Firebase
+                   {savingProgress ? 'Đang lưu...' : 'Lưu vào Firebase'}
                </button>
 
                <div className="h-8 w-px bg-slate-200 mx-2"></div>
