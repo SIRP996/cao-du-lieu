@@ -8,10 +8,11 @@ import {
 interface Props {
   data: TrackingProduct[];
   onBack: () => void;
-  isLoading?: boolean;
-  onRefresh?: () => void;
+  isLoading: boolean;
+  onRefresh: () => void;
 }
 
+// --- SVG CHART COMPONENT ---
 const HistoryChart = ({ history, color }: { history: any[], color: string }) => {
     if (!history || history.length < 2) return <div className="h-20 flex items-center justify-center text-[10px] text-slate-300">Chưa đủ dữ liệu</div>;
     
@@ -20,9 +21,10 @@ const HistoryChart = ({ history, color }: { history: any[], color: string }) => 
     const max = Math.max(...prices);
     const range = max - min || 1;
     
+    // Tạo points cho SVG polyline
     const points = prices.map((val, i) => {
         const x = (i / (prices.length - 1)) * 100;
-        const y = 100 - ((val - min) / range) * 80 - 10; 
+        const y = 100 - ((val - min) / range) * 80 - 10; // Padding top/bottom
         return `${x},${y}`;
     }).join(' ');
 
@@ -38,6 +40,7 @@ const HistoryChart = ({ history, color }: { history: any[], color: string }) => 
                     strokeLinejoin="round"
                     vectorEffect="non-scaling-stroke"
                 />
+                {/* Dots */}
                 {prices.map((val, i) => {
                      const x = (i / (prices.length - 1)) * 100;
                      const y = 100 - ((val - min) / range) * 80 - 10;
@@ -50,7 +53,7 @@ const HistoryChart = ({ history, color }: { history: any[], color: string }) => 
     );
 };
 
-const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = false, onRefresh = () => {} }) => {
+const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading, onRefresh }) => {
   const [selectedProduct, setSelectedProduct] = useState<TrackingProduct | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -78,6 +81,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = fal
   return (
     <div className="min-h-screen bg-[#f8fafc] p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       
+      {/* HEADER */}
       <div className="flex items-center justify-between mb-8 bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm">
         <div className="flex items-center gap-4">
             <button onClick={onBack} className="p-3 hover:bg-slate-100 rounded-full transition-colors">
@@ -109,6 +113,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = fal
 
       <div className="grid grid-cols-12 gap-6 h-[calc(100vh-180px)]">
          
+         {/* LEFT LIST */}
          <div className="col-span-4 bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden flex flex-col">
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="text-sm font-black uppercase text-slate-500 tracking-widest">Danh sách theo dõi ({filteredData.length})</h3>
@@ -136,9 +141,11 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = fal
             </div>
          </div>
 
+         {/* RIGHT DETAILS */}
          <div className="col-span-8 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
             {selectedProduct ? (
                 <>
+                   {/* HERO CARD */}
                    <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl relative overflow-hidden">
                        <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-bl-[100%] -mr-10 -mt-10"></div>
                        <h2 className="text-2xl font-black text-slate-800 mb-6 relative z-10">{selectedProduct.name}</h2>
@@ -147,6 +154,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = fal
                            {Object.entries(selectedProduct.sources).map(([source, data]: [string, any]) => {
                                const history = data.history || [];
                                const currentPrice = data.price;
+                               // Lấy giá hôm qua để so sánh
                                const prevPrice = history.length > 1 ? history[history.length - 2].price : currentPrice;
                                const diff = currentPrice - prevPrice;
                                const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
@@ -169,6 +177,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading = fal
                                        )}
                                        {diff === 0 && <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1"><Clock className="w-3 h-3" /> Ổn định</span>}
 
+                                       {/* Mini History Chart */}
                                        <div className="mt-4 pt-4 border-t border-slate-100 opacity-50 group-hover:opacity-100 transition-opacity">
                                            <HistoryChart history={history} color={diff > 0 ? '#f43f5e' : (diff < 0 ? '#10b981' : '#6366f1')} />
                                        </div>

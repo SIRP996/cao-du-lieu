@@ -1,15 +1,21 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers
 } from 'lucide-react';
-import { ProductData, AppStatus, SourceConfig } from './types';
+import { ProductData, AppStatus, SourceConfig, TrackingProduct } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
 import { exportToMultiSheetExcel } from './utils/excelExport';
 
+// --- IMPORTS CHO AUTH & FIREBASE ---
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import Login from './components/Login';
+import PriceTrackingDashboard from './components/PriceTrackingDashboard';
+import { saveScrapedDataToFirestore, getTrackedProducts } from './services/firebaseService';
+
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 
-// --- OPTIMIZED COMPONENT: SOURCE INPUT ---
+// --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
   source, 
   index, 
@@ -23,7 +29,6 @@ const SourceInputCard = memo(({
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
   const isShopee = source.name.toUpperCase().includes('SHOPEE');
 
-  // Auto-update ref value when props change (for extension auto-fill)
   useEffect(() => {
     if (htmlInputRef.current && htmlInputRef.current.value !== source.htmlHint) {
         htmlInputRef.current.value = source.htmlHint;
@@ -48,7 +53,6 @@ const SourceInputCard = memo(({
            />
         </div>
         
-        {/* VOUCHER INPUT FOR SHOPEE */}
         {isShopee && (
           <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
              <Tag className="w-3 h-3 text-orange-500" />
@@ -103,7 +107,11 @@ interface CrawlLog {
   type: 'info' | 'success' | 'error' | 'warning' | 'ai' | 'matrix' | 'system';
 }
 
-const App: React.FC = () => {
+// --- MAIN WORKSPACE COMPONENT ---
+const ScraperWorkspace: React.FC = () => {
+  const { currentUser, logout } = useAuth(); 
+  
+  // -- STATE --
   const [sources, setSources] = useState<SourceConfig[]>(
     Array(5).fill(null).map((_, i) => {
       const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
@@ -118,7 +126,10 @@ const App: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  // Filter States
+  // Tracking & Filter State
+  const [showTracking, setShowTracking] = useState(false);
+  const [trackingData, setTrackingData] = useState<TrackingProduct[]>([]);
+  const [isLoadingTracking, setIsLoadingTracking] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'dashboard'>('table');
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
@@ -126,6 +137,7 @@ const App: React.FC = () => {
   
   const logContainerRef = useRef<HTMLDivElement>(null);
 
+  // -- EFFECTS --
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -151,15 +163,13 @@ const App: React.FC = () => {
     }
   }, [logs]);
 
-  // --- EXTENSION LISTENER ---
+  // -- EXTENSION LISTENER --
   useEffect(() => {
     const handleExtensionMessage = (event: MessageEvent) => {
-      // Security check: only accept from window messages (extension content script executes in same window context)
       if (event.data?.type === 'SUPER_SCRAPER_EXTENSION_DATA') {
          const { html, url, title } = event.data.payload;
          typeLog(`[EXTENSION] Đã nhận dữ liệu từ: ${url}`, 'success');
          
-         // Auto-detect source based on URL or Title
          let targetName = "";
          const lowerUrl = url.toLowerCase();
          if (lowerUrl.includes("shopee")) targetName = "SHOPEE";
@@ -171,25 +181,18 @@ const App: React.FC = () => {
 
          setSources(prev => {
             const next = [...prev];
-            // 1. Try to find matching source name
             let idx = next.findIndex(s => s.name.toUpperCase() === targetName);
-            
-            // 2. If not found, find first empty slot
             if (idx === -1) {
                 idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
             }
-            
-            // 3. If full, just overwrite the first one or specific logic (here overwrite 0)
             if (idx === -1) idx = 0;
 
-            // Update
             next[idx] = {
                 ...next[idx],
-                name: targetName || next[idx].name, // Update name if detected
-                htmlHint: html, // Auto fill HTML
-                urls: [url] // Auto fill URL
+                name: targetName || next[idx].name, 
+                htmlHint: html, 
+                urls: [url] 
             };
-            
             typeLog(`[AUTO-FILL] Đã điền dữ liệu vào ô nguồn số ${idx + 1} (${next[idx].name})`, 'matrix');
             return next;
          });
@@ -199,6 +202,40 @@ const App: React.FC = () => {
     window.addEventListener('message', handleExtensionMessage);
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, []);
+
+  // -- HANDLERS --
+  const handleSyncToCloud = async () => {
+    if (!currentUser || results.length === 0) return;
+    const rawItems = results.filter(r => r.plCombo === 'Raw');
+    if (rawItems.length > 0) {
+        if(!confirm(`Có ${rawItems.length} sản phẩm chưa được chuẩn hóa tên (Giai đoạn 2). Dữ liệu lịch sử có thể bị phân tán. Bạn có muốn tiếp tục lưu không?`)) return;
+    }
+    try {
+        setNormalizationStatus(AppStatus.PROCESSING);
+        typeLog(`[CLOUD] Đang đẩy ${results.length} sản phẩm lên Firebase...`, 'system');
+        await saveScrapedDataToFirestore(currentUser.uid, results, sources);
+        typeLog(`[CLOUD] Đã lưu thành công! Chuyển qua tab Theo Dõi Giá để xem lịch sử.`, 'success');
+        alert("Đã lưu dữ liệu vào Cloud thành công!");
+    } catch (error: any) {
+        typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
+        console.error(error);
+    } finally {
+        setNormalizationStatus(AppStatus.IDLE);
+    }
+  };
+
+  const loadTrackingData = async () => {
+      if (!currentUser) return;
+      setIsLoadingTracking(true);
+      try {
+          const data = await getTrackedProducts(currentUser.uid);
+          setTrackingData(data);
+      } catch (error) {
+          console.error("Failed to load tracking data", error);
+      } finally {
+          setIsLoadingTracking(false);
+      }
+  };
 
   const updateSource = (index: number, field: keyof SourceConfig, val: any) => {
     setSources(prev => {
@@ -213,7 +250,6 @@ const App: React.FC = () => {
     setLogs(prev => [...prev, { id, message, type }].slice(-1000));
   };
 
-  // --- PHASE 1: RAW CRAWL ONLY ---
   const handleRawCrawl = async () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
@@ -236,12 +272,10 @@ const App: React.FC = () => {
     typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ.`, 'system');
     
     let completed = 0;
-
     for (const task of activeTasks) {
       typeLog(`[START] ${task.src.name} -> Bóc tách thô...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
-        
         if (rawItems.length > 0) {
           typeLog(`[OK] Tìm thấy ${rawItems.length} sản phẩm thô.`, 'success');
           const formatted = rawItems.map(p => ({
@@ -259,48 +293,31 @@ const App: React.FC = () => {
       completed++;
       setProgress(Math.round((completed / activeTasks.length) * 100));
     }
-
     typeLog(`>>> GIAI ĐOẠN 1 HOÀN TẤT. VUI LÒNG CHỌN TỐI ƯU HÓA Ở BẢNG KẾT QUẢ.`, 'system');
     setStatus(AppStatus.COMPLETED);
   };
 
-  // --- PHASE 2: NORMALIZATION ---
   const handleOptimize = async (method: 'code' | 'ai') => {
     if (results.length === 0) return;
-    
     setNormalizationStatus(AppStatus.PROCESSING);
     setProgress(0);
     typeLog(`>>> GIAI ĐOẠN 2: TỐI ƯU HÓA TÊN SP (${method === 'code' ? 'Thuật toán' : 'AI'})...`, 'system');
-
     try {
-      const optimizedResults = await processNormalization(results, method, (percent) => {
-        setProgress(percent);
-      });
-      
+      const optimizedResults = await processNormalization(results, method, (percent) => setProgress(percent));
       setResults(optimizedResults);
       typeLog(`[OK] Đã tối ưu hóa ${optimizedResults.length} sản phẩm.`, 'success');
       setShowSuccessModal(true);
     } catch (e) {
       typeLog(`[ERR] Lỗi tối ưu hóa: ${String(e)}`, 'error');
     }
-
     setNormalizationStatus(AppStatus.COMPLETED);
   };
 
+  // -- CALCULATIONS --
   const groupedResults = useMemo(() => {
-    const groups: Record<string, {
-      normalizedName: string; 
-      category: string;
-      subCategory: string;
-      prices: Record<number, number>;
-      urls: Record<number, string>;
-      plCombo: string;
-      displayName: string;
-    }> = {};
-
+    const groups: Record<string, any> = {};
     results.forEach(item => {
       const groupKey = (item.normalizedName || item.sanPham).trim();
-      
       if (!groups[groupKey]) {
         groups[groupKey] = {
           normalizedName: groupKey,
@@ -313,76 +330,43 @@ const App: React.FC = () => {
         };
       }
       
-      // LOGIC ÁP DỤNG VOUCHER
       const sourceConfig = sources[item.sourceIndex - 1];
       let finalPrice = item.gia;
-      
-      // Nếu là SHOPEE và có voucherPercent, thì giảm giá
       if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
         finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
-        // Làm tròn giá cho đẹp
         finalPrice = Math.round(finalPrice / 100) * 100;
       }
-
       const currentPrice = groups[groupKey].prices[item.sourceIndex];
-      // Logic chọn giá: Ưu tiên giá mới nếu chưa có hoặc giá thấp hơn
       if (!currentPrice || (finalPrice > 0 && finalPrice < currentPrice)) {
           groups[groupKey].prices[item.sourceIndex] = finalPrice;
           groups[groupKey].urls[item.sourceIndex] = item.productUrl;
       }
-      
-      if (item.phanLoaiTong && item.phanLoaiTong !== "Khác" && item.phanLoaiTong !== "Chưa xử lý") groups[groupKey].category = item.phanLoaiTong;
-      if (item.phanLoaiChiTiet && item.phanLoaiChiTiet !== "Khác" && item.phanLoaiChiTiet !== "Chưa xử lý") groups[groupKey].subCategory = item.phanLoaiChiTiet;
-      if (item.plCombo && item.plCombo !== "Raw" && item.plCombo !== "Lẻ") groups[groupKey].plCombo = item.plCombo;
+      if (item.phanLoaiTong && item.phanLoaiTong !== "Khác") groups[groupKey].category = item.phanLoaiTong;
+      if (item.phanLoaiChiTiet && item.phanLoaiChiTiet !== "Khác") groups[groupKey].subCategory = item.phanLoaiChiTiet;
+      if (item.plCombo && item.plCombo !== "Raw") groups[groupKey].plCombo = item.plCombo;
     });
 
     let list = Object.values(groups);
+    if (searchTerm) list = list.filter((g: any) => g.displayName.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (typeFilter === 'retail') list = list.filter((g: any) => g.plCombo.toLowerCase().includes('lẻ') || (!g.plCombo.toLowerCase().includes('combo') && !g.plCombo.toLowerCase().includes('bộ')));
+    else if (typeFilter === 'combo') list = list.filter((g: any) => g.plCombo.toLowerCase().includes('combo') || g.plCombo.toLowerCase().includes('bộ') || /\dx\d/i.test(g.plCombo));
     
-    if (searchTerm) {
-      list = list.filter(g => 
-        g.displayName.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    if (typeFilter === 'retail') {
-        list = list.filter(g => {
-            const lowerType = g.plCombo.toLowerCase();
-            return lowerType.includes('lẻ') || (!lowerType.includes('combo') && !lowerType.includes('bộ'));
-        });
-    } else if (typeFilter === 'combo') {
-        list = list.filter(g => {
-            const lowerType = g.plCombo.toLowerCase();
-            return lowerType.includes('combo') || lowerType.includes('bộ') || /\dx\d/i.test(lowerType) || g.displayName.includes("+");
-        });
-    }
-
     if (showDuplicatesOnly) {
-      list = list.filter(g => {
-        const sourceCount = Object.values(g.prices).filter(p => p > 0).length;
-        return sourceCount > 1;
-      });
+      list = list.filter((g: any) => Object.values(g.prices).filter((p: any) => p > 0).length > 1);
     }
-
-    return list.sort((a, b) => {
-        if (a.category !== b.category) return a.category.localeCompare(b.category);
-        if (a.plCombo !== b.plCombo) return a.plCombo.localeCompare(b.plCombo);
-        return a.displayName.localeCompare(b.displayName);
-    });
-  }, [results, searchTerm, showDuplicatesOnly, typeFilter, sources]); // IMPORTANT: Depend on 'sources' to re-calc when voucher changes
+    return list.sort((a: any, b: any) => a.displayName.localeCompare(b.displayName));
+  }, [results, searchTerm, showDuplicatesOnly, typeFilter, sources]);
 
   const stats = useMemo(() => {
     const allGroups: Record<string, any> = {};
     results.forEach(item => {
         const k = (item.normalizedName || item.sanPham).trim();
         if(!allGroups[k]) allGroups[k] = { prices: {} };
-        
-        // Cần tính lại giá trong Stats theo Voucher
         const sourceConfig = sources[item.sourceIndex - 1];
         let finalPrice = item.gia;
         if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
             finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
         }
-
         allGroups[k].prices[item.sourceIndex] = finalPrice;
     });
     const allGroupList = Object.values(allGroups);
@@ -410,12 +394,7 @@ const App: React.FC = () => {
     });
     const avgGap = gapCount > 0 ? Math.round(totalGap / gapCount) : 0;
     const cats: Record<string, number> = {};
-    results.forEach(r => {
-        if(r.phanLoaiTong && r.phanLoaiTong !== 'Chưa phân loại' && r.phanLoaiTong !== 'Chưa xử lý') {
-            const c = r.phanLoaiTong;
-            cats[c] = (cats[c] || 0) + 1;
-        }
-    });
+    results.forEach(r => { if(r.phanLoaiTong) cats[r.phanLoaiTong] = (cats[r.phanLoaiTong] || 0) + 1; });
     const sortedCats = Object.entries(cats).sort((a,b) => b[1] - a[1]).slice(0, 5);
     const topCat = sortedCats.length > 0 ? sortedCats[0][0] : "Chưa có";
     const sourceStats = sources.map((src, idx) => {
@@ -435,10 +414,23 @@ const App: React.FC = () => {
     return { totalRaw, totalGroups, avgGap, topCat, sortedCats, topGaps, sourceStats };
   }, [results, sources]);
 
+  // -- TRACKING MODE RENDER --
+  if (showTracking) {
+      return (
+          <PriceTrackingDashboard 
+             data={trackingData} 
+             onBack={() => setShowTracking(false)} 
+             isLoading={isLoadingTracking}
+             onRefresh={loadTrackingData}
+          />
+      );
+  }
+
+  // -- MAIN RENDER --
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* PROCESSING OVERLAY */}
+      {/* GLOBAL LOADING OVERLAY */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -446,20 +438,15 @@ const App: React.FC = () => {
                  <div className="absolute inset-0 border-8 border-indigo-100 rounded-full"></div>
                  <div className="absolute inset-0 border-8 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Zap className="w-12 h-12 text-indigo-600 animate-pulse" />
+                    <UploadCloud className="w-12 h-12 text-indigo-600 animate-bounce" />
                  </div>
               </div>
               <div>
-                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang tối ưu hóa...</h3>
-                 <p className="text-slate-500 font-bold mt-2">Vui lòng không tắt trình duyệt</p>
+                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang đồng bộ...</h3>
+                 <p className="text-slate-500 font-bold mt-2">Dữ liệu đang được đẩy lên Firebase</p>
               </div>
-              
-              <div className="w-full h-6 bg-slate-100 rounded-full overflow-hidden border border-slate-200 p-1 relative">
-                 <div 
-                   className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
-                   style={{width: `${progress}%`}}
-                 ></div>
-                 <span className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-slate-600 z-10">{progress}%</span>
+              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto overflow-hidden">
+                   <div className="h-full bg-indigo-600 animate-progress"></div>
               </div>
            </div>
         </div>
@@ -488,7 +475,7 @@ const App: React.FC = () => {
          </div>
       )}
 
-      {/* GUIDE MODAL (UPDATED FOR EXTENSION) */}
+      {/* HELP / EXTENSION MODAL */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/50 z-[999] flex items-center justify-center p-4 backdrop-blur-sm">
            <div className="bg-white rounded-[2rem] p-8 max-w-2xl w-full shadow-2xl animate-in fade-in zoom-in duration-200">
@@ -513,7 +500,6 @@ const App: React.FC = () => {
                      Lưu ý: Tab Web App này phải đang mở sẵn thì Extension mới tìm thấy để gửi dữ liệu.
                  </div>
               </div>
-
               <div className="mt-8 pt-6 border-t border-slate-100 text-center">
                  <button onClick={() => setShowHelp(false)} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold uppercase hover:bg-indigo-700 transition-colors">Đã Hiểu</button>
               </div>
@@ -535,9 +521,26 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
-             <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Database</button>
-             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-indigo-600 text-white rounded-[2rem] hover:bg-indigo-700 disabled:opacity-50 font-black text-[13px] shadow-2xl shadow-indigo-100 transition-all uppercase tracking-widest">
-              <Download className="w-5 h-5" /> Xuất Báo Cáo (Đa Sheet)
+             {currentUser && (
+               <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100">
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
+                      <User className="w-4 h-4 text-indigo-600" />
+                  </div>
+                  <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Xin chào</span>
+                      <span className="text-xs font-black text-slate-800 max-w-[100px] truncate">{currentUser.email}</span>
+                  </div>
+               </div>
+             )}
+
+             <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu tạm?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Temp</button>
+             
+             <button onClick={() => logout()} className="p-3 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-full transition-all" title="Đăng xuất">
+                <LogOut className="w-5 h-5" />
+             </button>
+
+             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-white text-indigo-600 border border-indigo-100 rounded-[2rem] hover:bg-indigo-50 disabled:opacity-50 font-black text-[13px] shadow-sm transition-all uppercase tracking-widest">
+              <Download className="w-5 h-5" /> Xuất Excel
             </button>
           </div>
         </header>
@@ -597,7 +600,6 @@ const App: React.FC = () => {
                 ))}
               </div>
               
-              {/* MAIN START BUTTON (PHASE 1) */}
               <div className="p-6 bg-slate-800/80">
                  <button 
                    onClick={handleRawCrawl}
@@ -612,7 +614,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Matrix Results & Dashboard Section */}
+        {/* Matrix Results */}
         <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl overflow-hidden min-h-[500px]">
           <div className="px-12 py-8 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-center gap-8 bg-slate-50/30">
             <div className="flex items-center gap-8">
@@ -631,24 +633,37 @@ const App: React.FC = () => {
                   <Table2 className="w-4 h-4" /> Dữ liệu chi tiết
                 </button>
                 <button 
-                  onClick={() => setViewMode('dashboard')}
-                  className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${viewMode === 'dashboard' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  onClick={() => {
+                      loadTrackingData(); // Tải dữ liệu từ Firebase
+                      setShowTracking(true); // Mở dashboard
+                  }}
+                  className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${showTracking ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-white/50'}`}
                 >
-                  <LayoutGrid className="w-4 h-4" /> Dashboard Thị trường
+                  <TrendingUp className="w-4 h-4" /> Theo Dõi Giá (Cloud)
                 </button>
               </div>
             </div>
             
-            {/* OPTIMIZE BUTTONS (PHASE 2) - DISPLAYED HERE */}
             <div className="flex items-center gap-3">
-               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-2">Công cụ tối ưu hóa:</div>
+               <button 
+                  onClick={handleSyncToCloud}
+                  disabled={results.length === 0}
+                  className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
+               >
+                   <UploadCloud className="w-4 h-4"/>
+                   Lưu vào Firebase
+               </button>
+
+               <div className="h-8 w-px bg-slate-200 mx-2"></div>
+
+               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-2">Tối ưu hóa:</div>
                <button 
                   onClick={() => handleOptimize('code')}
                   disabled={normalizationStatus === AppStatus.PROCESSING || results.length === 0}
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-50 text-emerald-600 font-black text-[10px] uppercase tracking-widest border border-emerald-100 hover:bg-emerald-100 hover:shadow-lg transition-all disabled:opacity-50"
                >
                    <Zap className="w-4 h-4 fill-current"/>
-                   Gọn tên (Thuật Toán)
+                   Thuật Toán
                </button>
                <button 
                   onClick={() => handleOptimize('ai')}
@@ -656,13 +671,12 @@ const App: React.FC = () => {
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-50 text-indigo-600 font-black text-[10px] uppercase tracking-widest border border-indigo-100 hover:bg-indigo-100 hover:shadow-lg transition-all disabled:opacity-50"
                >
                    <BrainCircuit className="w-4 h-4"/>
-                   Gọn tên (AI Gemini)
+                   AI Gemini
                </button>
             </div>
           </div>
 
           <div className="px-8 pb-8 pt-4">
-             {/* FILTERS */}
             {viewMode === 'table' && (
               <div className="flex flex-wrap items-center gap-4 w-full md:w-auto mb-6">
                 
@@ -714,7 +728,6 @@ const App: React.FC = () => {
                         <th key={i} className="px-6 py-8 text-[11px] font-black uppercase text-indigo-600 tracking-widest text-center border-l border-slate-100 bg-indigo-50/10">
                           <div className="flex flex-col items-center">
                             <span>{src.name.toUpperCase()}</span>
-                            {/* HIỂN THỊ BADGE VOUCHER NẾU CÓ */}
                             {src.name.toUpperCase().includes('SHOPEE') && src.voucherPercent && src.voucherPercent > 0 && (
                                 <span className="mt-1 text-[9px] bg-orange-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
                                     -{src.voucherPercent}%
@@ -732,7 +745,6 @@ const App: React.FC = () => {
                       const minP = Math.min(...activePrices);
                       const maxP = Math.max(...activePrices);
                       const diff = activePrices.length > 1 ? Math.round(((maxP - minP) / minP) * 100) : 0;
-
                       return (
                         <tr key={idx} className="hover:bg-indigo-50/5 transition-all group/row">
                           <td className="px-12 py-8">
@@ -798,7 +810,7 @@ const App: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-12 animate-in fade-in zoom-in duration-300">
-                {/* Stats Cards */}
+                {/* Stats & Charts UI */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
                       <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Tổng sản phẩm quét</p>
@@ -868,7 +880,6 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
-                {/* SOURCE BREAKDOWN */}
                 <div>
                   <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight mb-6 flex items-center gap-3 px-2">
                     <Database className="w-5 h-5 text-indigo-600" /> Thống kê chi tiết theo nguồn
@@ -910,9 +921,31 @@ const App: React.FC = () => {
         .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 20px; border: 3px solid #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+        .animate-progress { animation: progress 1.5s ease-in-out infinite; width: 50%; }
+        @keyframes progress { 0% { margin-left: -50%; } 100% { margin-left: 100%; } }
       `}</style>
     </div>
   );
+};
+
+// --- AUTH GUARD COMPONENT ---
+const AuthGuard = () => {
+  const { currentUser } = useAuth();
+  
+  if (!currentUser) {
+    return <Login />;
+  }
+  
+  return <ScraperWorkspace />;
+};
+
+// --- ROOT APP ---
+const App = () => {
+    return (
+        <AuthProvider>
+            <AuthGuard />
+        </AuthProvider>
+    );
 };
 
 export default App;
