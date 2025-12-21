@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, TicketPercent
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Ticket
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -51,7 +51,7 @@ const SourceInputCard = memo(({
         {/* VOUCHER INPUT FOR SHOPEE */}
         {isShopee && (
           <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
-             <TicketPercent className="w-3 h-3 text-orange-500" />
+             <Ticket className="w-3 h-3 text-orange-500" />
              <input 
                type="number"
                placeholder="% Voucher"
@@ -728,7 +728,7 @@ const App: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {groupedResults.length > 0 ? groupedResults.map((group, idx) => {
-                      const activePrices = Object.values(group.prices).filter(p => p > 0);
+                      const activePrices = (Object.values(group.prices) as number[]).filter((p: number) => p > 0);
                       const minP = Math.min(...activePrices);
                       const maxP = Math.max(...activePrices);
                       const diff = activePrices.length > 1 ? Math.round(((maxP - minP) / minP) * 100) : 0;
