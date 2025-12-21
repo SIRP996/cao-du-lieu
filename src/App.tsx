@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, CloudUpload, User, Layers
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -438,7 +438,7 @@ const ScraperWorkspace: React.FC = () => {
                  <div className="absolute inset-0 border-8 border-indigo-100 rounded-full"></div>
                  <div className="absolute inset-0 border-8 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
                  <div className="absolute inset-0 flex items-center justify-center">
-                    <CloudUpload className="w-12 h-12 text-indigo-600 animate-bounce" />
+                    <UploadCloud className="w-12 h-12 text-indigo-600 animate-bounce" />
                  </div>
               </div>
               <div>
@@ -650,7 +650,7 @@ const ScraperWorkspace: React.FC = () => {
                   disabled={results.length === 0}
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
-                   <CloudUpload className="w-4 h-4"/>
+                   <UploadCloud className="w-4 h-4"/>
                    Lưu vào Firebase
                </button>
 
