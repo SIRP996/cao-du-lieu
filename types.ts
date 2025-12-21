@@ -27,3 +27,31 @@ export enum AppStatus {
   COMPLETED = 'COMPLETED',
   ERROR = 'ERROR'
 }
+
+// --- TRACKING SYSTEM TYPES (NEW) ---
+
+export interface PriceLog {
+  time: string; // "00:00", "02:00"...
+  price: number;
+}
+
+export interface DailyHistory {
+  date: string; // "25/10"
+  avgPrice: number;
+  logs: PriceLog[];
+}
+
+export interface TrackingSourceData {
+  price: number;
+  url: string;
+  history: DailyHistory[];
+}
+
+export interface TrackingProduct {
+  id: string; // SKU
+  name: string;
+  category: string;
+  lastUpdated: string; // ISO String
+  image_url?: string;
+  sources: Record<string, TrackingSourceData>; // key: 'shopee', 'lazada'...
+}

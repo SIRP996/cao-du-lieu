@@ -1,6 +1,6 @@
 {
   "name": "super-scraper-pro",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@google/genai": "latest",
+    "firebase": "^10.8.0",
     "lucide-react": "^0.300.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
