@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App'; // Import App từ cùng thư mục src (Super App)
-import '../index.css';   // Import CSS từ thư mục cha (root)
+import App from './App';
+import './index.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
