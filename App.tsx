@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -11,7 +11,7 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject } from './services/firebaseService';
+import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 
@@ -125,11 +125,11 @@ const ScraperWorkspace: React.FC = () => {
   const [logs, setLogs] = useState<CrawlLog[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showProjectManager, setShowProjectManager] = useState(false);
   
   // Project & Saving State
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [savingProgress, setSavingProgress] = useState<{current: number, total: number} | null>(null);
 
   // Tracking & Filter State
@@ -172,12 +172,18 @@ const ScraperWorkspace: React.FC = () => {
   // Load Projects on Mount
   useEffect(() => {
       if (currentUser) {
-          getUserProjects(currentUser.uid).then(projs => {
-              setProjects(projs);
-              if (projs.length > 0) setCurrentProject(projs[0]);
-          });
+          refreshProjects();
       }
   }, [currentUser]);
+
+  const refreshProjects = () => {
+      if (currentUser) {
+          getUserProjects(currentUser.uid).then(projs => {
+              setProjects(projs);
+              if (projs.length > 0 && !currentProject) setCurrentProject(projs[0]);
+          });
+      }
+  };
 
   // -- EXTENSION LISTENER --
   useEffect(() => {
@@ -219,7 +225,7 @@ const ScraperWorkspace: React.FC = () => {
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, []);
 
-  // -- HANDLERS --
+  // -- PROJECT HANDLERS --
   const handleCreateProject = async () => {
       const name = prompt("Nhập tên dự án mới:");
       if (!name || !currentUser) return;
@@ -228,9 +234,37 @@ const ScraperWorkspace: React.FC = () => {
           setProjects(prev => [newProj, ...prev]);
           setCurrentProject(newProj);
           typeLog(`[PROJECT] Đã tạo dự án: ${name}`, 'success');
-      } catch (e) {
+      } catch (e: any) {
           console.error(e);
-          alert("Lỗi tạo dự án");
+          alert("Lỗi tạo dự án: " + e.message + "\n(Hãy chắc chắn bạn đã cập nhật Firestore Rules)");
+      }
+  };
+
+  const handleEditProject = async (proj: Project) => {
+      const newName = prompt("Đổi tên dự án:", proj.name);
+      if (newName && newName !== proj.name) {
+          try {
+              await updateProject(proj.id, newName);
+              setProjects(prev => prev.map(p => p.id === proj.id ? {...p, name: newName} : p));
+              if (currentProject?.id === proj.id) setCurrentProject({...currentProject, name: newName});
+          } catch (e: any) {
+              alert("Lỗi cập nhật: " + e.message);
+          }
+      }
+  };
+
+  const handleDeleteProject = async (proj: Project) => {
+      if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"? Dữ liệu bên trong sẽ mất liên kết.`)) {
+          try {
+              await deleteProject(proj.id);
+              const remaining = projects.filter(p => p.id !== proj.id);
+              setProjects(remaining);
+              if (currentProject?.id === proj.id) {
+                  setCurrentProject(remaining.length > 0 ? remaining[0] : null);
+              }
+          } catch (e: any) {
+               alert("Lỗi xóa: " + e.message);
+          }
       }
   };
 
@@ -257,6 +291,7 @@ const ScraperWorkspace: React.FC = () => {
     ).then(() => {
         typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
         setSavingProgress(null);
+        refreshProjects(); // Update project stats
     }).catch((error: any) => {
         typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
         setSavingProgress(null);
@@ -267,7 +302,6 @@ const ScraperWorkspace: React.FC = () => {
       if (!currentUser) return;
       setIsLoadingTracking(true);
       try {
-          // Chỉ load sản phẩm của dự án hiện tại (nếu có chọn) hoặc tất cả
           const data = await getTrackedProducts(currentUser.uid, currentProject?.id);
           setTrackingData(data);
       } catch (error) {
@@ -502,6 +536,52 @@ const ScraperWorkspace: React.FC = () => {
           </div>
       )}
 
+      {/* PROJECT MANAGER MODAL */}
+      {showProjectManager && (
+          <div className="fixed inset-0 bg-black/60 z-[1002] flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in duration-300">
+              <div className="bg-white rounded-[2rem] p-8 max-w-2xl w-full shadow-2xl overflow-hidden relative">
+                  <div className="flex justify-between items-center mb-6">
+                      <div className="flex items-center gap-3">
+                          <div className="bg-indigo-100 p-3 rounded-xl">
+                              <FolderOpen className="w-6 h-6 text-indigo-600" />
+                          </div>
+                          <div>
+                              <h3 className="text-xl font-black uppercase text-slate-800">Quản Lý Dự Án</h3>
+                              <p className="text-xs text-slate-500 font-bold">Danh sách các dự án đã tạo</p>
+                          </div>
+                      </div>
+                      <button onClick={() => setShowProjectManager(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
+                  </div>
+
+                  <div className="max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 space-y-3 mb-6">
+                      {projects.map(p => (
+                          <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border ${currentProject?.id === p.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100 bg-slate-50'}`}>
+                              <div className="flex items-center gap-3" onClick={() => { setCurrentProject(p); setShowProjectManager(false); }}>
+                                  <div className={`w-3 h-3 rounded-full ${currentProject?.id === p.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
+                                  <div>
+                                      <h4 className={`text-sm font-black cursor-pointer hover:underline ${currentProject?.id === p.id ? 'text-indigo-700' : 'text-slate-700'}`}>{p.name}</h4>
+                                      <p className="text-[10px] text-slate-400">{new Date(p.createdAt).toLocaleDateString('vi-VN')} • {p.productCount || 0} sản phẩm</p>
+                                  </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                  <button onClick={() => handleEditProject(p)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-colors"><Edit2 className="w-4 h-4" /></button>
+                                  <button onClick={() => handleDeleteProject(p)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-white rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                          </div>
+                      ))}
+                      {projects.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">Chưa có dự án nào</div>}
+                  </div>
+
+                  <button 
+                      onClick={handleCreateProject}
+                      className="w-full py-4 bg-slate-900 text-white rounded-xl font-black uppercase tracking-widest text-xs hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                  >
+                      <Plus className="w-4 h-4" /> Tạo Dự Án Mới
+                  </button>
+              </div>
+          </div>
+      )}
+
       {/* GLOBAL LOADING OVERLAY (Only for Normalization) */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
@@ -590,52 +670,28 @@ const ScraperWorkspace: React.FC = () => {
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
               <div className="flex items-center gap-2 mt-2">
-                  {/* PROJECT SELECTOR */}
-                  <div className="relative">
-                      <button 
-                        onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
-                        className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                         <FolderOpen className="w-3 h-3" />
-                         {currentProject ? currentProject.name : "Chưa chọn dự án"}
-                         <ChevronDown className="w-3 h-3" />
-                      </button>
-
-                      {isProjectDropdownOpen && (
-                          <div className="absolute top-full left-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 p-2 z-50 animate-in zoom-in-95 duration-200">
-                              <div className="text-[10px] font-bold text-slate-400 px-3 py-2 uppercase tracking-widest">Danh sách dự án</div>
-                              {projects.map(p => (
-                                  <div 
-                                    key={p.id}
-                                    onClick={() => { setCurrentProject(p); setIsProjectDropdownOpen(false); }}
-                                    className={`flex items-center justify-between p-3 rounded-xl cursor-pointer text-xs font-bold ${currentProject?.id === p.id ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'}`}
-                                  >
-                                      {p.name}
-                                      {currentProject?.id === p.id && <Check className="w-3 h-3" />}
-                                  </div>
-                              ))}
-                              <div className="h-px bg-slate-100 my-2"></div>
-                              <button 
-                                onClick={() => { handleCreateProject(); setIsProjectDropdownOpen(false); }}
-                                className="w-full flex items-center gap-2 p-3 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
-                              >
-                                  <FolderPlus className="w-3 h-3" /> Tạo Dự Án Mới
-                              </button>
-                          </div>
-                      )}
+                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
+                      <FolderOpen className="w-3 h-3" />
+                      {currentProject ? currentProject.name : "Chưa chọn dự án"}
                   </div>
               </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
              {currentUser && (
-               <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100">
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                      <User className="w-4 h-4 text-indigo-600" />
+               <div 
+                 onClick={() => setShowProjectManager(true)}
+                 className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100 cursor-pointer hover:bg-indigo-50 hover:border-indigo-100 transition-all group"
+               >
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-500 transition-colors">
+                      <User className="w-4 h-4 text-indigo-600 group-hover:text-white" />
                   </div>
                   <div className="flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase">Xin chào</span>
-                      <span className="text-xs font-black text-slate-800 max-w-[100px] truncate">{currentUser.email}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-800 max-w-[100px] truncate">{currentUser.email}</span>
+                        <Settings className="w-3 h-3 text-slate-300 group-hover:text-indigo-500" />
+                      </div>
                   </div>
                </div>
              )}

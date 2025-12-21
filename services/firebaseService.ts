@@ -35,6 +35,22 @@ export const createProject = async (userId: string, projectName: string): Promis
 };
 
 /**
+ * Cập nhật tên dự án
+ */
+export const updateProject = async (projectId: string, newName: string) => {
+    await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
+        name: newName
+    });
+};
+
+/**
+ * Xóa dự án (Lưu ý: Trong thực tế nên xóa cả sản phẩm con, ở đây tạm thời xóa project cha)
+ */
+export const deleteProject = async (projectId: string) => {
+    await db.collection(COLLECTION_PROJECTS).doc(projectId).delete();
+};
+
+/**
  * Hàm lưu dữ liệu lên Firebase có hỗ trợ Project và Progress Callback
  */
 export const saveScrapedDataToFirestore = async (
