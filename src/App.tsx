@@ -15,16 +15,7 @@ import { saveScrapedDataToFirestore, getTrackedProducts } from './services/fireb
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 
-// --- WRAPPER COMPONENT (CẤU HÌNH AUTH) ---
-const AppWrapper = () => {
-    return (
-        <AuthProvider>
-            <MainApp />
-        </AuthProvider>
-    );
-};
-
-// --- OPTIMIZED COMPONENT: SOURCE INPUT ---
+// --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
   source, 
   index, 
@@ -38,7 +29,6 @@ const SourceInputCard = memo(({
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
   const isShopee = source.name.toUpperCase().includes('SHOPEE');
 
-  // Auto-update ref value when props change (for extension auto-fill)
   useEffect(() => {
     if (htmlInputRef.current && htmlInputRef.current.value !== source.htmlHint) {
         htmlInputRef.current.value = source.htmlHint;
@@ -63,7 +53,6 @@ const SourceInputCard = memo(({
            />
         </div>
         
-        {/* VOUCHER INPUT FOR SHOPEE */}
         {isShopee && (
           <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
              <Tag className="w-3 h-3 text-orange-500" />
@@ -118,12 +107,11 @@ interface CrawlLog {
   type: 'info' | 'success' | 'error' | 'warning' | 'ai' | 'matrix' | 'system';
 }
 
-// --- MAIN APP COMPONENT ---
-const MainApp: React.FC = () => {
-  // 1. KÍCH HOẠT HOOK AUTH
+// --- LOGIC CHÍNH CỦA ỨNG DỤNG (CHỈ RENDER KHI ĐÃ LOGIN) ---
+const Dashboard: React.FC = () => {
   const { currentUser, logout } = useAuth(); 
-
-  // 2. KHAI BÁO STATE
+  
+  // -- STATE --
   const [sources, setSources] = useState<SourceConfig[]>(
     Array(5).fill(null).map((_, i) => {
       const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
@@ -138,12 +126,10 @@ const MainApp: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
-  // Tracking & Dashboard State
+  // Tracking & Filter State
   const [showTracking, setShowTracking] = useState(false);
   const [trackingData, setTrackingData] = useState<TrackingProduct[]>([]);
   const [isLoadingTracking, setIsLoadingTracking] = useState(false);
-  
-  // Filter States
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'dashboard'>('table');
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
@@ -151,13 +137,7 @@ const MainApp: React.FC = () => {
   
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // 3. KIỂM TRA ĐĂNG NHẬP: NẾU CHƯA CÓ USER -> TRẢ VỀ TRANG LOGIN
-  if (!currentUser) {
-      return <Login />;
-  }
-
-  // --- NẾU ĐÃ ĐĂNG NHẬP: CHẠY CODE BÊN DƯỚI ---
-
+  // -- EFFECTS --
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
@@ -183,15 +163,13 @@ const MainApp: React.FC = () => {
     }
   }, [logs]);
 
-  // --- EXTENSION LISTENER ---
+  // -- EXTENSION LISTENER --
   useEffect(() => {
     const handleExtensionMessage = (event: MessageEvent) => {
-      // Security check: only accept from window messages
       if (event.data?.type === 'SUPER_SCRAPER_EXTENSION_DATA') {
          const { html, url, title } = event.data.payload;
          typeLog(`[EXTENSION] Đã nhận dữ liệu từ: ${url}`, 'success');
          
-         // Auto-detect source based on URL or Title
          let targetName = "";
          const lowerUrl = url.toLowerCase();
          if (lowerUrl.includes("shopee")) targetName = "SHOPEE";
@@ -215,7 +193,6 @@ const MainApp: React.FC = () => {
                 htmlHint: html, 
                 urls: [url] 
             };
-            
             typeLog(`[AUTO-FILL] Đã điền dữ liệu vào ô nguồn số ${idx + 1} (${next[idx].name})`, 'matrix');
             return next;
          });
@@ -226,23 +203,17 @@ const MainApp: React.FC = () => {
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, []);
 
-  // --- FIREBASE SYNC LOGIC ---
+  // -- HANDLERS --
   const handleSyncToCloud = async () => {
     if (!currentUser || results.length === 0) return;
-    
     const rawItems = results.filter(r => r.plCombo === 'Raw');
     if (rawItems.length > 0) {
-        if(!confirm(`Có ${rawItems.length} sản phẩm chưa được chuẩn hóa tên (Giai đoạn 2). Dữ liệu lịch sử có thể bị phân tán. Bạn có muốn tiếp tục lưu không?`)) {
-            return;
-        }
+        if(!confirm(`Có ${rawItems.length} sản phẩm chưa được chuẩn hóa tên (Giai đoạn 2). Dữ liệu lịch sử có thể bị phân tán. Bạn có muốn tiếp tục lưu không?`)) return;
     }
-
     try {
         setNormalizationStatus(AppStatus.PROCESSING);
         typeLog(`[CLOUD] Đang đẩy ${results.length} sản phẩm lên Firebase...`, 'system');
-        
         await saveScrapedDataToFirestore(currentUser.uid, results, sources);
-        
         typeLog(`[CLOUD] Đã lưu thành công! Chuyển qua tab Theo Dõi Giá để xem lịch sử.`, 'success');
         alert("Đã lưu dữ liệu vào Cloud thành công!");
     } catch (error: any) {
@@ -266,18 +237,6 @@ const MainApp: React.FC = () => {
       }
   };
 
-  // Nếu đang ở màn Tracking
-  if (showTracking) {
-      return (
-          <PriceTrackingDashboard 
-             data={trackingData} 
-             onBack={() => setShowTracking(false)} 
-             isLoading={isLoadingTracking}
-             onRefresh={loadTrackingData}
-          />
-      );
-  }
-
   const updateSource = (index: number, field: keyof SourceConfig, val: any) => {
     setSources(prev => {
       const next = [...prev];
@@ -291,7 +250,6 @@ const MainApp: React.FC = () => {
     setLogs(prev => [...prev, { id, message, type }].slice(-1000));
   };
 
-  // --- PHASE 1: RAW CRAWL ONLY ---
   const handleRawCrawl = async () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
@@ -314,12 +272,10 @@ const MainApp: React.FC = () => {
     typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ.`, 'system');
     
     let completed = 0;
-
     for (const task of activeTasks) {
       typeLog(`[START] ${task.src.name} -> Bóc tách thô...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
-        
         if (rawItems.length > 0) {
           typeLog(`[OK] Tìm thấy ${rawItems.length} sản phẩm thô.`, 'success');
           const formatted = rawItems.map(p => ({
@@ -337,49 +293,31 @@ const MainApp: React.FC = () => {
       completed++;
       setProgress(Math.round((completed / activeTasks.length) * 100));
     }
-
     typeLog(`>>> GIAI ĐOẠN 1 HOÀN TẤT. VUI LÒNG CHỌN TỐI ƯU HÓA Ở BẢNG KẾT QUẢ.`, 'system');
     setStatus(AppStatus.COMPLETED);
   };
 
-  // --- PHASE 2: NORMALIZATION ---
   const handleOptimize = async (method: 'code' | 'ai') => {
     if (results.length === 0) return;
-    
     setNormalizationStatus(AppStatus.PROCESSING);
     setProgress(0);
     typeLog(`>>> GIAI ĐOẠN 2: TỐI ƯU HÓA TÊN SP (${method === 'code' ? 'Thuật toán' : 'AI'})...`, 'system');
-
     try {
-      const optimizedResults = await processNormalization(results, method, (percent) => {
-        setProgress(percent);
-      });
-      
+      const optimizedResults = await processNormalization(results, method, (percent) => setProgress(percent));
       setResults(optimizedResults);
       typeLog(`[OK] Đã tối ưu hóa ${optimizedResults.length} sản phẩm.`, 'success');
       setShowSuccessModal(true);
     } catch (e) {
       typeLog(`[ERR] Lỗi tối ưu hóa: ${String(e)}`, 'error');
     }
-
     setNormalizationStatus(AppStatus.COMPLETED);
   };
 
-  // --- CALCULATED DATA ---
+  // -- CALCULATIONS --
   const groupedResults = useMemo(() => {
-    const groups: Record<string, {
-      normalizedName: string; 
-      category: string;
-      subCategory: string;
-      prices: Record<number, number>;
-      urls: Record<number, string>;
-      plCombo: string;
-      displayName: string;
-    }> = {};
-
+    const groups: Record<string, any> = {};
     results.forEach(item => {
       const groupKey = (item.normalizedName || item.sanPham).trim();
-      
       if (!groups[groupKey]) {
         groups[groupKey] = {
           normalizedName: groupKey,
@@ -398,50 +336,25 @@ const MainApp: React.FC = () => {
         finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
         finalPrice = Math.round(finalPrice / 100) * 100;
       }
-
       const currentPrice = groups[groupKey].prices[item.sourceIndex];
       if (!currentPrice || (finalPrice > 0 && finalPrice < currentPrice)) {
           groups[groupKey].prices[item.sourceIndex] = finalPrice;
           groups[groupKey].urls[item.sourceIndex] = item.productUrl;
       }
-      
-      if (item.phanLoaiTong && item.phanLoaiTong !== "Khác" && item.phanLoaiTong !== "Chưa xử lý") groups[groupKey].category = item.phanLoaiTong;
-      if (item.phanLoaiChiTiet && item.phanLoaiChiTiet !== "Khác" && item.phanLoaiChiTiet !== "Chưa xử lý") groups[groupKey].subCategory = item.phanLoaiChiTiet;
-      if (item.plCombo && item.plCombo !== "Raw" && item.plCombo !== "Lẻ") groups[groupKey].plCombo = item.plCombo;
+      if (item.phanLoaiTong && item.phanLoaiTong !== "Khác") groups[groupKey].category = item.phanLoaiTong;
+      if (item.phanLoaiChiTiet && item.phanLoaiChiTiet !== "Khác") groups[groupKey].subCategory = item.phanLoaiChiTiet;
+      if (item.plCombo && item.plCombo !== "Raw") groups[groupKey].plCombo = item.plCombo;
     });
 
     let list = Object.values(groups);
+    if (searchTerm) list = list.filter((g: any) => g.displayName.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (typeFilter === 'retail') list = list.filter((g: any) => g.plCombo.toLowerCase().includes('lẻ') || (!g.plCombo.toLowerCase().includes('combo') && !g.plCombo.toLowerCase().includes('bộ')));
+    else if (typeFilter === 'combo') list = list.filter((g: any) => g.plCombo.toLowerCase().includes('combo') || g.plCombo.toLowerCase().includes('bộ') || /\dx\d/i.test(g.plCombo));
     
-    if (searchTerm) {
-      list = list.filter(g => 
-        g.displayName.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    if (typeFilter === 'retail') {
-        list = list.filter(g => {
-            const lowerType = g.plCombo.toLowerCase();
-            return lowerType.includes('lẻ') || (!lowerType.includes('combo') && !lowerType.includes('bộ'));
-        });
-    } else if (typeFilter === 'combo') {
-        list = list.filter(g => {
-            const lowerType = g.plCombo.toLowerCase();
-            return lowerType.includes('combo') || lowerType.includes('bộ') || /\dx\d/i.test(lowerType) || g.displayName.includes("+");
-        });
-    }
-
     if (showDuplicatesOnly) {
-      list = list.filter(g => {
-        const sourceCount = Object.values(g.prices).filter(p => p > 0).length;
-        return sourceCount > 1;
-      });
+      list = list.filter((g: any) => Object.values(g.prices).filter((p: any) => p > 0).length > 1);
     }
-
-    return list.sort((a, b) => {
-        if (a.category !== b.category) return a.category.localeCompare(b.category);
-        if (a.plCombo !== b.plCombo) return a.plCombo.localeCompare(b.plCombo);
-        return a.displayName.localeCompare(b.displayName);
-    });
+    return list.sort((a: any, b: any) => a.displayName.localeCompare(b.displayName));
   }, [results, searchTerm, showDuplicatesOnly, typeFilter, sources]);
 
   const stats = useMemo(() => {
@@ -449,13 +362,11 @@ const MainApp: React.FC = () => {
     results.forEach(item => {
         const k = (item.normalizedName || item.sanPham).trim();
         if(!allGroups[k]) allGroups[k] = { prices: {} };
-        
         const sourceConfig = sources[item.sourceIndex - 1];
         let finalPrice = item.gia;
         if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
             finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
         }
-
         allGroups[k].prices[item.sourceIndex] = finalPrice;
     });
     const allGroupList = Object.values(allGroups);
@@ -483,12 +394,7 @@ const MainApp: React.FC = () => {
     });
     const avgGap = gapCount > 0 ? Math.round(totalGap / gapCount) : 0;
     const cats: Record<string, number> = {};
-    results.forEach(r => {
-        if(r.phanLoaiTong && r.phanLoaiTong !== 'Chưa phân loại' && r.phanLoaiTong !== 'Chưa xử lý') {
-            const c = r.phanLoaiTong;
-            cats[c] = (cats[c] || 0) + 1;
-        }
-    });
+    results.forEach(r => { if(r.phanLoaiTong) cats[r.phanLoaiTong] = (cats[r.phanLoaiTong] || 0) + 1; });
     const sortedCats = Object.entries(cats).sort((a,b) => b[1] - a[1]).slice(0, 5);
     const topCat = sortedCats.length > 0 ? sortedCats[0][0] : "Chưa có";
     const sourceStats = sources.map((src, idx) => {
@@ -508,10 +414,22 @@ const MainApp: React.FC = () => {
     return { totalRaw, totalGroups, avgGap, topCat, sortedCats, topGaps, sourceStats };
   }, [results, sources]);
 
+  // -- TRACKING MODE RENDER --
+  if (showTracking) {
+      return (
+          <PriceTrackingDashboard 
+             data={trackingData} 
+             onBack={() => setShowTracking(false)} 
+             isLoading={isLoadingTracking}
+             onRefresh={loadTrackingData}
+          />
+      );
+  }
+
+  // -- MAIN RENDER --
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* PROCESSING OVERLAY */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -533,7 +451,6 @@ const MainApp: React.FC = () => {
         </div>
       )}
 
-      {/* SUCCESS MODAL */}
       {showSuccessModal && (
          <div className="fixed inset-0 bg-black/60 z-[1001] flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in duration-300">
             <div className="bg-white rounded-[2.5rem] p-10 max-w-lg w-full shadow-2xl text-center relative overflow-hidden">
@@ -556,7 +473,6 @@ const MainApp: React.FC = () => {
          </div>
       )}
 
-      {/* GUIDE MODAL */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/50 z-[999] flex items-center justify-center p-4 backdrop-blur-sm">
            <div className="bg-white rounded-[2rem] p-8 max-w-2xl w-full shadow-2xl animate-in fade-in zoom-in duration-200">
@@ -581,7 +497,6 @@ const MainApp: React.FC = () => {
                      Lưu ý: Tab Web App này phải đang mở sẵn thì Extension mới tìm thấy để gửi dữ liệu.
                  </div>
               </div>
-
               <div className="mt-8 pt-6 border-t border-slate-100 text-center">
                  <button onClick={() => setShowHelp(false)} className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold uppercase hover:bg-indigo-700 transition-colors">Đã Hiểu</button>
               </div>
@@ -603,7 +518,6 @@ const MainApp: React.FC = () => {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
-             {/* USER INFO & LOGOUT */}
              {currentUser && (
                <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100">
                   <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
@@ -618,7 +532,6 @@ const MainApp: React.FC = () => {
 
              <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu tạm?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Temp</button>
              
-             {/* LOGOUT BUTTON */}
              <button onClick={() => logout()} className="p-3 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-full transition-all" title="Đăng xuất">
                 <LogOut className="w-5 h-5" />
              </button>
@@ -684,7 +597,6 @@ const MainApp: React.FC = () => {
                 ))}
               </div>
               
-              {/* MAIN START BUTTON (PHASE 1) */}
               <div className="p-6 bg-slate-800/80">
                  <button 
                    onClick={handleRawCrawl}
@@ -699,7 +611,7 @@ const MainApp: React.FC = () => {
           </div>
         </div>
 
-        {/* Matrix Results & Dashboard Section */}
+        {/* Matrix Results */}
         <div className="bg-white rounded-[3.5rem] border border-slate-200 shadow-2xl overflow-hidden min-h-[500px]">
           <div className="px-12 py-8 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-center gap-8 bg-slate-50/30">
             <div className="flex items-center gap-8">
@@ -729,7 +641,6 @@ const MainApp: React.FC = () => {
               </div>
             </div>
             
-            {/* OPTIMIZE BUTTONS (PHASE 2) - DISPLAYED HERE */}
             <div className="flex items-center gap-3">
                <button 
                   onClick={handleSyncToCloud}
@@ -763,7 +674,6 @@ const MainApp: React.FC = () => {
           </div>
 
           <div className="px-8 pb-8 pt-4">
-             {/* FILTERS */}
             {viewMode === 'table' && (
               <div className="flex flex-wrap items-center gap-4 w-full md:w-auto mb-6">
                 
@@ -815,7 +725,6 @@ const MainApp: React.FC = () => {
                         <th key={i} className="px-6 py-8 text-[11px] font-black uppercase text-indigo-600 tracking-widest text-center border-l border-slate-100 bg-indigo-50/10">
                           <div className="flex flex-col items-center">
                             <span>{src.name.toUpperCase()}</span>
-                            {/* HIỂN THỊ BADGE VOUCHER NẾU CÓ */}
                             {src.name.toUpperCase().includes('SHOPEE') && src.voucherPercent && src.voucherPercent > 0 && (
                                 <span className="mt-1 text-[9px] bg-orange-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
                                     -{src.voucherPercent}%
@@ -833,7 +742,6 @@ const MainApp: React.FC = () => {
                       const minP = Math.min(...activePrices);
                       const maxP = Math.max(...activePrices);
                       const diff = activePrices.length > 1 ? Math.round(((maxP - minP) / minP) * 100) : 0;
-
                       return (
                         <tr key={idx} className="hover:bg-indigo-50/5 transition-all group/row">
                           <td className="px-12 py-8">
@@ -899,7 +807,7 @@ const MainApp: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-12 animate-in fade-in zoom-in duration-300">
-                {/* Stats Cards */}
+                {/* Stats & Charts UI */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
                       <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Tổng sản phẩm quét</p>
@@ -969,7 +877,6 @@ const MainApp: React.FC = () => {
                   </div>
                 </div>
 
-                {/* SOURCE BREAKDOWN */}
                 <div>
                   <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight mb-6 flex items-center gap-3 px-2">
                     <Database className="w-5 h-5 text-indigo-600" /> Thống kê chi tiết theo nguồn
@@ -1018,4 +925,25 @@ const MainApp: React.FC = () => {
   );
 };
 
-export default AppWrapper;
+// --- AUTH GUARD COMPONENT ---
+// Tách biệt logic điều hướng để không ảnh hưởng đến hooks của Dashboard
+const AuthGuard = () => {
+  const { currentUser } = useAuth();
+  
+  if (!currentUser) {
+    return <Login />;
+  }
+  
+  return <Dashboard />;
+};
+
+// --- ROOT APP ---
+const App = () => {
+    return (
+        <AuthProvider>
+            <AuthGuard />
+        </AuthProvider>
+    );
+};
+
+export default App;
