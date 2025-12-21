@@ -11,12 +11,21 @@ const COLLECTION_PROJECTS = 'projects';
 export const getUserProjects = async (userId: string): Promise<Project[]> => {
   if (!userId) return [];
   try {
+    // SỬA LỖI: Bỏ .orderBy("createdAt", "desc") ở đây để tránh lỗi "Missing Index" của Firebase
+    // Chỉ query theo userId
     const snapshot = await db.collection(COLLECTION_PROJECTS)
       .where("userId", "==", userId)
-      .orderBy("createdAt", "desc")
       .get();
     
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+    const projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+
+    // Thực hiện sắp xếp ở phía Client (Javascript)
+    return projects.sort((a, b) => {
+        const timeA = new Date(a.createdAt).getTime();
+        const timeB = new Date(b.createdAt).getTime();
+        return timeB - timeA; // Mới nhất lên đầu
+    });
+
   } catch (error) {
     console.error("Error fetching projects:", error);
     return [];

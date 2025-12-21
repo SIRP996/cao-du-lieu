@@ -707,7 +707,7 @@ const ScraperWorkspace: React.FC = () => {
           <div className="flex flex-wrap items-center gap-4">
              {currentUser && (
                <div 
-                 onClick={() => setShowProjectManager(true)}
+                 onClick={() => { refreshProjects(); setShowProjectManager(true); }}
                  className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100 cursor-pointer hover:bg-indigo-50 hover:border-indigo-100 transition-all group"
                >
                   <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-500 transition-colors">
