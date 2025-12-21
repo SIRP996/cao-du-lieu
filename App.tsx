@@ -630,16 +630,22 @@ const ScraperWorkspace: React.FC = () => {
                   onClick={() => setViewMode('table')}
                   className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${viewMode === 'table' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
                 >
-                  <Table2 className="w-4 h-4" /> Dữ liệu chi tiết
+                  <Table2 className="w-4 h-4" /> Chi tiết
+                </button>
+                <button 
+                  onClick={() => setViewMode('dashboard')}
+                  className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${viewMode === 'dashboard' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  <LayoutGrid className="w-4 h-4" /> Phân Tích
                 </button>
                 <button 
                   onClick={() => {
-                      loadTrackingData(); // Tải dữ liệu từ Firebase
-                      setShowTracking(true); // Mở dashboard
+                      loadTrackingData(); 
+                      setShowTracking(true);
                   }}
                   className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${showTracking ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-white/50'}`}
                 >
-                  <TrendingUp className="w-4 h-4" /> Theo Dõi Giá (Cloud)
+                  <TrendingUp className="w-4 h-4" /> Theo Dõi Giá
                 </button>
               </div>
             </div>

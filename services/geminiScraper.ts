@@ -3,8 +3,11 @@ import { ProductData } from "../types";
 
 // Hàm khởi tạo AI an toàn, chỉ chạy khi cần dùng
 const getAIClient = () => {
+  // Vite sẽ thay thế process.env.API_KEY bằng chuỗi thực tế khi build
   const apiKey = process.env.API_KEY;
+  
   if (!apiKey || apiKey.length < 10) {
+    console.error("DEBUG API KEY:", apiKey ? `Found (Length: ${apiKey.length})` : "Undefined/Null");
     throw new Error(
       "❌ THIẾU API KEY!\n" +
       "- Trên Vercel: Vào Settings > Environment Variables > Thêm Key='API_KEY', Value='AIza...' > Sau đó REDEPLOY lại.\n" +
