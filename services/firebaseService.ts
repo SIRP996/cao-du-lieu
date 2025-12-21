@@ -6,16 +6,21 @@ const COLLECTION_PRODUCTS = 'tracked_products';
 const COLLECTION_PROJECTS = 'projects';
 
 /**
- * Lấy danh sách dự án của User
+ * Lấy danh sách dự án của User (Sắp xếp mới nhất trước)
  */
 export const getUserProjects = async (userId: string): Promise<Project[]> => {
   if (!userId) return [];
-  const snapshot = await db.collection(COLLECTION_PROJECTS)
-    .where("userId", "==", userId)
-    .orderBy("createdAt", "desc")
-    .get();
-  
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+  try {
+    const snapshot = await db.collection(COLLECTION_PROJECTS)
+      .where("userId", "==", userId)
+      .orderBy("createdAt", "desc")
+      .get();
+    
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    return [];
+  }
 };
 
 /**
@@ -38,16 +43,24 @@ export const createProject = async (userId: string, projectName: string): Promis
  * Cập nhật tên dự án
  */
 export const updateProject = async (projectId: string, newName: string) => {
+    if (!projectId || !newName) return;
     await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
         name: newName
     });
 };
 
 /**
- * Xóa dự án (Lưu ý: Trong thực tế nên xóa cả sản phẩm con, ở đây tạm thời xóa project cha)
+ * Xóa dự án
  */
 export const deleteProject = async (projectId: string) => {
+    if (!projectId) return;
     await db.collection(COLLECTION_PROJECTS).doc(projectId).delete();
+    
+    // (Optional) Có thể xóa thêm các sản phẩm thuộc dự án này nếu muốn dọn sạch DB
+    // const batch = db.batch();
+    // const products = await db.collection(COLLECTION_PRODUCTS).where('projectId', '==', projectId).get();
+    // products.forEach(doc => batch.delete(doc.ref));
+    // await batch.commit();
 };
 
 /**
@@ -77,8 +90,7 @@ export const saveScrapedDataToFirestore = async (
   const total = entries.length;
   let processed = 0;
 
-  // 2. Duyệt qua từng nhóm sản phẩm (Xử lý tuần tự hoặc song song giới hạn để update progress)
-  // Sử dụng vòng lặp for...of để dễ kiểm soát luồng
+  // 2. Duyệt qua từng nhóm sản phẩm
   for (const [name, items] of entries) {
     // Tạo ID dựa trên ProjectID + Tên sản phẩm -> Đảm bảo mỗi dự án độc lập hoàn toàn
     const safeName = btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 30);

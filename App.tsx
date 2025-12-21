@@ -14,6 +14,7 @@ import PriceTrackingDashboard from './components/PriceTrackingDashboard';
 import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
+const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
 
 // --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
@@ -169,19 +170,38 @@ const ScraperWorkspace: React.FC = () => {
     }
   }, [logs]);
 
-  // Load Projects on Mount
+  // Load Projects on Mount AND Restore Selected Project
   useEffect(() => {
       if (currentUser) {
           refreshProjects();
       }
   }, [currentUser]);
 
-  const refreshProjects = () => {
-      if (currentUser) {
-          getUserProjects(currentUser.uid).then(projs => {
-              setProjects(projs);
-              if (projs.length > 0 && !currentProject) setCurrentProject(projs[0]);
-          });
+  // AUTO-SAVE: Khi người dùng chọn dự án, lưu ID vào localStorage
+  useEffect(() => {
+    if (currentProject) {
+        localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+    }
+  }, [currentProject]);
+
+  const refreshProjects = async () => {
+      if (!currentUser) return;
+      try {
+          const projs = await getUserProjects(currentUser.uid);
+          setProjects(projs);
+          
+          // RESTORE: Tìm lại dự án cũ từ localStorage
+          const savedId = localStorage.getItem(PROJECT_STORAGE_KEY);
+          const foundProj = projs.find(p => p.id === savedId);
+
+          if (foundProj) {
+              setCurrentProject(foundProj);
+          } else if (projs.length > 0 && !currentProject) {
+              // Nếu không tìm thấy (hoặc mới vào lần đầu), chọn dự án mới nhất
+              setCurrentProject(projs[0]);
+          }
+      } catch (e) {
+          console.error("Load project failed:", e);
       }
   };
 
@@ -236,7 +256,7 @@ const ScraperWorkspace: React.FC = () => {
           typeLog(`[PROJECT] Đã tạo dự án: ${name}`, 'success');
       } catch (e: any) {
           console.error(e);
-          alert("Lỗi tạo dự án: " + e.message + "\n(Hãy chắc chắn bạn đã cập nhật Firestore Rules)");
+          alert("Lỗi tạo dự án: " + e.message + "\n(Vui lòng kiểm tra Firestore Rules)");
       }
   };
 
@@ -245,8 +265,11 @@ const ScraperWorkspace: React.FC = () => {
       if (newName && newName !== proj.name) {
           try {
               await updateProject(proj.id, newName);
+              // Update local state
               setProjects(prev => prev.map(p => p.id === proj.id ? {...p, name: newName} : p));
-              if (currentProject?.id === proj.id) setCurrentProject({...currentProject, name: newName});
+              if (currentProject?.id === proj.id) {
+                  setCurrentProject({...currentProject, name: newName});
+              }
           } catch (e: any) {
               alert("Lỗi cập nhật: " + e.message);
           }
@@ -254,13 +277,17 @@ const ScraperWorkspace: React.FC = () => {
   };
 
   const handleDeleteProject = async (proj: Project) => {
-      if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"? Dữ liệu bên trong sẽ mất liên kết.`)) {
+      if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"?`)) {
           try {
               await deleteProject(proj.id);
+              // Update local state
               const remaining = projects.filter(p => p.id !== proj.id);
               setProjects(remaining);
+              // If deleted active project, select another one or null
               if (currentProject?.id === proj.id) {
-                  setCurrentProject(remaining.length > 0 ? remaining[0] : null);
+                  const next = remaining.length > 0 ? remaining[0] : null;
+                  setCurrentProject(next);
+                  if(!next) localStorage.removeItem(PROJECT_STORAGE_KEY);
               }
           } catch (e: any) {
                alert("Lỗi xóa: " + e.message);
@@ -556,16 +583,16 @@ const ScraperWorkspace: React.FC = () => {
                   <div className="max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 space-y-3 mb-6">
                       {projects.map(p => (
                           <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border ${currentProject?.id === p.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100 bg-slate-50'}`}>
-                              <div className="flex items-center gap-3" onClick={() => { setCurrentProject(p); setShowProjectManager(false); }}>
+                              <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => { setCurrentProject(p); setShowProjectManager(false); }}>
                                   <div className={`w-3 h-3 rounded-full ${currentProject?.id === p.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
                                   <div>
-                                      <h4 className={`text-sm font-black cursor-pointer hover:underline ${currentProject?.id === p.id ? 'text-indigo-700' : 'text-slate-700'}`}>{p.name}</h4>
+                                      <h4 className={`text-sm font-black hover:underline ${currentProject?.id === p.id ? 'text-indigo-700' : 'text-slate-700'}`}>{p.name}</h4>
                                       <p className="text-[10px] text-slate-400">{new Date(p.createdAt).toLocaleDateString('vi-VN')} • {p.productCount || 0} sản phẩm</p>
                                   </div>
                               </div>
                               <div className="flex items-center gap-2">
-                                  <button onClick={() => handleEditProject(p)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-colors"><Edit2 className="w-4 h-4" /></button>
-                                  <button onClick={() => handleDeleteProject(p)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-white rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleEditProject(p); }} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"><Edit2 className="w-4 h-4" /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteProject(p); }} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                               </div>
                           </div>
                       ))}
