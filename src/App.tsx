@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, CloudUpload, User
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, CloudUpload, User, Layers
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -107,8 +107,8 @@ interface CrawlLog {
   type: 'info' | 'success' | 'error' | 'warning' | 'ai' | 'matrix' | 'system';
 }
 
-// --- LOGIC CHÍNH CỦA ỨNG DỤNG (CHỈ RENDER KHI ĐÃ LOGIN) ---
-const Dashboard: React.FC = () => {
+// --- MAIN WORKSPACE COMPONENT (Trước đây là Dashboard, đổi tên để tránh nhầm lẫn) ---
+const ScraperWorkspace: React.FC = () => {
   const { currentUser, logout } = useAuth(); 
   
   // -- STATE --
@@ -430,6 +430,7 @@ const Dashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
+      {/* GLOBAL LOADING OVERLAY */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -451,6 +452,7 @@ const Dashboard: React.FC = () => {
         </div>
       )}
 
+      {/* SUCCESS MODAL */}
       {showSuccessModal && (
          <div className="fixed inset-0 bg-black/60 z-[1001] flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in duration-300">
             <div className="bg-white rounded-[2.5rem] p-10 max-w-lg w-full shadow-2xl text-center relative overflow-hidden">
@@ -473,6 +475,7 @@ const Dashboard: React.FC = () => {
          </div>
       )}
 
+      {/* HELP / EXTENSION MODAL */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/50 z-[999] flex items-center justify-center p-4 backdrop-blur-sm">
            <div className="bg-white rounded-[2rem] p-8 max-w-2xl w-full shadow-2xl animate-in fade-in zoom-in duration-200">
@@ -926,7 +929,6 @@ const Dashboard: React.FC = () => {
 };
 
 // --- AUTH GUARD COMPONENT ---
-// Tách biệt logic điều hướng để không ảnh hưởng đến hooks của Dashboard
 const AuthGuard = () => {
   const { currentUser } = useAuth();
   
@@ -934,7 +936,7 @@ const AuthGuard = () => {
     return <Login />;
   }
   
-  return <Dashboard />;
+  return <ScraperWorkspace />;
 };
 
 // --- ROOT APP ---

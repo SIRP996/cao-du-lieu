@@ -1,15 +1,4 @@
 import { db } from '../firebase/config';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  getDocs, 
-  query, 
-  where, 
-  writeBatch,
-  Timestamp,
-  getDoc
-} from 'firebase/firestore';
 import { ProductData, TrackingProduct, SourceConfig } from '../types';
 
 // Tên collection trong Firestore
@@ -37,22 +26,20 @@ export const saveScrapedDataToFirestore = async (
     grouped[key].push(p);
   });
 
-  const batch = writeBatch(db);
-  let operationCount = 0;
   const todayStr = new Date().toLocaleDateString('vi-VN'); // dd/mm/yyyy
   const nowISO = new Date().toISOString();
 
   // 2. Duyệt qua từng nhóm sản phẩm
   for (const [name, items] of Object.entries(grouped)) {
-    // Tạo ID dựa trên tên sản phẩm (để dễ dàng update lần sau)
-    // Lưu ý: Trong thực tế nên dùng SKU thật, ở đây ta hash tên thành ID đơn giản
+    // Tạo ID dựa trên tên sản phẩm
     const productId = `PROD_${userId}_${btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20)}`;
     
-    const productRef = doc(db, COLLECTION_NAME, productId);
+    // v8 syntax: db.collection().doc()
+    const productRef = db.collection(COLLECTION_NAME).doc(productId);
     
     // Lấy dữ liệu cũ (nếu có) để merge lịch sử
-    const docSnap = await getDoc(productRef);
-    let existingData: any = docSnap.exists() ? docSnap.data() : null;
+    const docSnap = await productRef.get();
+    let existingData: any = docSnap.exists ? docSnap.data() : null;
 
     // Cấu trúc nguồn giá mới
     const sourcesUpdate: Record<string, any> = existingData ? { ...existingData.sources } : {};
@@ -76,13 +63,11 @@ export const saveScrapedDataToFirestore = async (
             finalPrice = item.gia * (1 - config.voucherPercent / 100);
         }
 
-        // Logic History:
-        // Cấu trúc lưu history: Array [{ date: "25/10/2023", price: 100000 }]
-        // Chúng ta sẽ append giá mới vào.
+        // Logic History
         const prevSourceData = sourcesUpdate[sourceKey] || { history: [] };
         const prevHistory = Array.isArray(prevSourceData.history) ? prevSourceData.history : [];
 
-        // Kiểm tra xem hôm nay đã log giá chưa, nếu rồi thì update, chưa thì push mới
+        // Kiểm tra xem hôm nay đã log giá chưa
         const todayLogIndex = prevHistory.findIndex((h: any) => h.date === todayStr);
         
         let newHistory = [...prevHistory];
@@ -97,7 +82,7 @@ export const saveScrapedDataToFirestore = async (
                 price: finalPrice,
                 timestamp: nowISO
             });
-            // Giới hạn history chỉ giữ 30 ngày gần nhất để nhẹ DB
+            // Giới hạn history chỉ giữ 30 ngày gần nhất
             if (newHistory.length > 30) newHistory.shift(); 
         }
 
@@ -119,12 +104,8 @@ export const saveScrapedDataToFirestore = async (
         searchName: name.toLowerCase() // field phụ để search
     };
 
-    setDoc(productRef, productPayload, { merge: true }); // Dùng merge để không mất field khác
-    // Lưu ý: setDoc không tính vào batch limit của Firestore theo cách direct này, 
-    // nhưng để tối ưu hiệu năng cho 500 sp, ta nên dùng batch. 
-    // Tuy nhiên batch.set() phức tạp hơn với logic read-modify-write. 
-    // Ở đây ta gọi setDoc trực tiếp từng cái cho đơn giản code, 
-    // vì React sẽ xử lý async. (Lưu ý về Rate Limit của Firestore nếu > 500 writes/s)
+    // v8 syntax: set with merge
+    await productRef.set(productPayload, { merge: true });
   }
 };
 
@@ -134,14 +115,11 @@ export const saveScrapedDataToFirestore = async (
 export const getTrackedProducts = async (userId: string): Promise<TrackingProduct[]> => {
     if (!userId) return [];
     
-    const q = query(collection(db, COLLECTION_NAME), where("userId", "==", userId));
-    const querySnapshot = await getDocs(q);
+    // v8 syntax: collection().where().get()
+    const querySnapshot = await db.collection(COLLECTION_NAME).where("userId", "==", userId).get();
     
     return querySnapshot.docs.map(doc => {
         const data = doc.data();
-        // Map dữ liệu Firestore sang Interface TrackingProduct
-        // Cần transform mảng history đơn giản thành cấu trúc phức tạp hơn nếu Dashboard yêu cầu
-        // Ở đây ta trả về raw data, Dashboard sẽ tự render
         return data as TrackingProduct;
     });
 };
