@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, googleProvider } from '../firebase/config';
-import firebase from 'firebase/app';
+import firebase from 'firebase/compat/app';
 import { Loader2, ShieldCheck, AlertTriangle } from 'lucide-react';
 
 interface AuthContextType {
