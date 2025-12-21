@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Ticket
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -51,7 +51,7 @@ const SourceInputCard = memo(({
         {/* VOUCHER INPUT FOR SHOPEE */}
         {isShopee && (
           <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
-             <Ticket className="w-3 h-3 text-orange-500" />
+             <Tag className="w-3 h-3 text-orange-500" />
              <input 
                type="number"
                placeholder="% Voucher"
