@@ -106,6 +106,20 @@ const preProcessHtml = (rawHtml: string): string => {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- URL RESOLVER HELPER ---
+// Hàm này đảm bảo link luôn là tuyệt đối (https://...)
+const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
+  if (!rawUrl) return baseUrl;
+  try {
+    // Nếu rawUrl đã là tuyệt đối (http...), new URL sẽ giữ nguyên nó
+    // Nếu rawUrl là tương đối (/product...), new URL sẽ nối với baseUrl
+    return new URL(rawUrl, baseUrl).href;
+  } catch (e) {
+    // Trường hợp tệ nhất, trả về rawUrl (hoặc có thể trả về baseUrl nếu muốn an toàn tuyệt đối)
+    return rawUrl;
+  }
+};
+
 // --- ALGORITHMIC LOGIC ---
 const calculateMatchScore = (rawName: string, officialName: string) => {
   const rawSlug = slugify(rawName);
@@ -233,25 +247,19 @@ export const parseRawProducts = async (
       
       const rawData = JSON.parse(response.text || "[]");
 
-      let baseUrl = "";
-      try { if (url.startsWith("http")) baseUrl = new URL(url).origin; } catch(e) {}
-
       return rawData.map((item: any) => {
-        let pUrl = item.productUrl || "";
-        if (!pUrl && url.startsWith("http")) pUrl = url;
-        if (pUrl && !pUrl.startsWith('http') && baseUrl) {
-          const cleanPath = pUrl.startsWith('/') ? pUrl.substring(1) : pUrl;
-          pUrl = `${baseUrl}/${cleanPath}`;
-        }
+        // --- FIX LINK LOGIC ---
+        // Dùng source URL (biến url đầu vào) làm base để nối link
+        const fixedUrl = resolveProductUrl(item.productUrl, url);
         
-        // Trả về dữ liệu thô, chưa chuẩn hóa
         return {
           ...item,
           normalizedName: item.sanPham, // Tạm thời để tên gốc
           plCombo: "Raw",
           phanLoaiTong: "Chưa xử lý",
           phanLoaiChiTiet: "Chưa xử lý",
-          url: url,
+          productUrl: fixedUrl, // Sử dụng link đã fix
+          url: url, // Link nguồn cha
           sourceIndex,
           status: 'pending' as const
         };

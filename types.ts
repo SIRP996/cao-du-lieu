@@ -18,6 +18,7 @@ export interface SourceConfig {
   name: string; // Tên nguồn tự đặt (Shopee, Hasaki...)
   urls: string[]; // Danh sách nhiều URL
   htmlHint: string;
+  voucherPercent?: number; // Thêm trường voucher (chỉ dùng cho Shopee hoặc mở rộng sau này)
 }
 
 export enum AppStatus {

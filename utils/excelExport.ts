@@ -9,22 +9,37 @@ export const exportToMultiSheetExcel = (
 ) => {
   const workbook = XLSX.utils.book_new();
 
+  // --- HELPER: TÍNH GIÁ ĐÃ GIẢM ---
+  const getDiscountedPrice = (price: number, sourceName: string, sources: SourceConfig[]) => {
+      const config = sources.find(s => s.name === sourceName);
+      if (config && config.name.toUpperCase().includes('SHOPEE') && config.voucherPercent && config.voucherPercent > 0) {
+          return Math.round(price * (1 - config.voucherPercent / 100));
+      }
+      return price;
+  };
+
   // --- SHEET 1: TOÀN BỘ DỮ LIỆU (RAW) ---
-  const allDataSheet = results.map(item => ({
-    "ID": item.id,
-    "Tên chuẩn hóa": item.normalizedName || item.sanPham,
-    "Tên gốc (Raw)": item.sanPham,
-    "Giá": item.gia,
-    "Nguồn": sources[item.sourceIndex - 1]?.name || `Source ${item.sourceIndex}`,
-    "Phân loại (Tổng)": item.phanLoaiTong,
-    "Phân loại (Chi tiết)": item.phanLoaiChiTiet,
-    "Loại Combo": item.plCombo,
-    "Link gốc": item.productUrl || item.url,
-    "Trạng thái": item.status
-  }));
+  const allDataSheet = results.map(item => {
+    const sourceName = sources[item.sourceIndex - 1]?.name || `Source ${item.sourceIndex}`;
+    const finalPrice = getDiscountedPrice(item.gia, sourceName, sources);
+    
+    return {
+      "ID": item.id,
+      "Tên chuẩn hóa": item.normalizedName || item.sanPham,
+      "Tên gốc (Raw)": item.sanPham,
+      "Giá Gốc": item.gia,
+      "Giá Sau Voucher": finalPrice,
+      "Nguồn": sourceName,
+      "Phân loại (Tổng)": item.phanLoaiTong,
+      "Phân loại (Chi tiết)": item.phanLoaiChiTiet,
+      "Loại Combo": item.plCombo,
+      "Link gốc": item.productUrl || item.url,
+      "Trạng thái": item.status
+    };
+  });
   const wsAll = XLSX.utils.json_to_sheet(allDataSheet);
   // Auto width
-  wsAll['!cols'] = [{wch: 10}, {wch: 40}, {wch: 40}, {wch: 15}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 15}, {wch: 50}, {wch: 10}];
+  wsAll['!cols'] = [{wch: 10}, {wch: 40}, {wch: 40}, {wch: 15}, {wch: 15}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 15}, {wch: 50}, {wch: 10}];
   XLSX.utils.book_append_sheet(workbook, wsAll, "1. TỔNG HỢP");
 
   // --- SHEET 2 -> 6: TỪNG NGUỒN RIÊNG BIỆT ---
@@ -33,16 +48,20 @@ export const exportToMultiSheetExcel = (
     const srcItems = results.filter(r => r.sourceIndex === srcIndex);
     
     // Ngay cả khi không có dữ liệu cũng tạo sheet để giữ đúng cấu trúc
-    const data = srcItems.map(item => ({
-      "Tên sản phẩm": item.sanPham,
-      "Tên chuẩn": item.normalizedName,
-      "Giá bán": item.gia,
-      "Phân loại": item.phanLoaiChiTiet,
-      "Link sản phẩm": item.productUrl
-    }));
+    const data = srcItems.map(item => {
+        const finalPrice = getDiscountedPrice(item.gia, src.name, sources);
+        return {
+            "Tên sản phẩm": item.sanPham,
+            "Tên chuẩn": item.normalizedName,
+            "Giá bán": finalPrice,
+            "Ghi chú giá": finalPrice < item.gia ? `Đã giảm ${src.voucherPercent}%` : "",
+            "Phân loại": item.phanLoaiChiTiet,
+            "Link sản phẩm": item.productUrl
+        };
+    });
 
     const wsSrc = XLSX.utils.json_to_sheet(data.length > 0 ? data : [{"Thông báo": "Không có dữ liệu cho nguồn này"}]);
-    wsSrc['!cols'] = [{wch: 50}, {wch: 40}, {wch: 15}, {wch: 20}, {wch: 50}];
+    wsSrc['!cols'] = [{wch: 50}, {wch: 40}, {wch: 15}, {wch: 20}, {wch: 20}, {wch: 50}];
     
     // Tên sheet không được quá 31 ký tự
     let sheetName = `${idx + 2}. ${src.name}`.substring(0, 31).replace(/[\/\\\?\*\[\]]/g, ""); 
@@ -63,7 +82,8 @@ export const exportToMultiSheetExcel = (
       "Loại Combo": group.plCombo,
     };
     
-    // Giá từng nguồn
+    // Giá từng nguồn (đã được tính giảm giá ở groupedData truyền vào từ App.tsx, nhưng tính lại cho chắc ăn hoặc lấy từ group.prices)
+    // Lưu ý: groupedData truyền vào từ App.tsx đã có giá sau voucher rồi.
     sources.forEach((src, idx) => {
       const price = group.prices[idx + 1];
       row[`Giá [${src.name}]`] = price ? price : 0;
@@ -99,11 +119,12 @@ export const exportToMultiSheetExcel = (
   const duplicateCount = duplicateGroups.length;
 
   // 2. Thống kê theo nguồn
-  const sourceStatsHeader = ["Nguồn", "Số lượng", "Tỉ trọng (%)"];
+  const sourceStatsHeader = ["Nguồn", "Số lượng", "Tỉ trọng (%)", "Voucher Áp Dụng (%)"];
   const sourceStatsRows = sources.map((src, idx) => {
     const count = results.filter(r => r.sourceIndex === idx + 1).length;
     const percent = totalProducts > 0 ? (count / totalProducts) : 0;
-    return [src.name, count, percent];
+    const voucher = (src.name.toUpperCase().includes('SHOPEE') && src.voucherPercent) ? `${src.voucherPercent}%` : "0%";
+    return [src.name, count, percent, voucher];
   });
 
   // 3. Thống kê theo ngành hàng (Top 5)
@@ -133,7 +154,7 @@ export const exportToMultiSheetExcel = (
   ];
 
   const wsDash = XLSX.utils.aoa_to_sheet(dashboardData);
-  wsDash['!cols'] = [{wch: 30}, {wch: 20}, {wch: 15}];
+  wsDash['!cols'] = [{wch: 30}, {wch: 20}, {wch: 15}, {wch: 20}];
   XLSX.utils.book_append_sheet(workbook, wsDash, "8. DASHBOARD");
 
   // --- XUẤT FILE ---

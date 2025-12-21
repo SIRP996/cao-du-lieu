@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, TicketPercent
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -21,6 +21,7 @@ const SourceInputCard = memo(({
 }) => {
   const htmlInputRef = useRef<HTMLTextAreaElement>(null);
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
+  const isShopee = source.name.toUpperCase().includes('SHOPEE');
 
   // Auto-update ref value when props change (for extension auto-fill)
   useEffect(() => {
@@ -38,12 +39,32 @@ const SourceInputCard = memo(({
         <div className={`w-10 h-10 flex items-center justify-center rounded-2xl font-black text-xs transition-all ${source.htmlHint ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white'}`}>
           {index + 1}
         </div>
-        <input 
-          type="text" 
-          defaultValue={source.name} 
-          onBlur={(e) => onUpdate(index, 'name', e.target.value)}
-          className="bg-transparent border-none p-0 text-xs font-black uppercase tracking-widest text-slate-700 outline-none w-full focus:text-indigo-600 transition-colors"
-        />
+        <div className="flex-1">
+           <input 
+            type="text" 
+            defaultValue={source.name} 
+            onBlur={(e) => onUpdate(index, 'name', e.target.value)}
+            className="bg-transparent border-none p-0 text-xs font-black uppercase tracking-widest text-slate-700 outline-none w-full focus:text-indigo-600 transition-colors"
+           />
+        </div>
+        
+        {/* VOUCHER INPUT FOR SHOPEE */}
+        {isShopee && (
+          <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
+             <TicketPercent className="w-3 h-3 text-orange-500" />
+             <input 
+               type="number"
+               placeholder="% Voucher"
+               min="0"
+               max="100"
+               defaultValue={source.voucherPercent || ''}
+               onChange={(e) => onUpdate(index, 'voucherPercent', Number(e.target.value))}
+               className="w-16 bg-transparent text-[10px] font-bold text-orange-600 placeholder:text-orange-300 outline-none text-right"
+             />
+             <span className="text-[9px] font-black text-orange-400">%</span>
+          </div>
+        )}
+
         {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập</span>}
       </div>
       <div className="space-y-4">
@@ -292,9 +313,21 @@ const App: React.FC = () => {
         };
       }
       
+      // LOGIC ÁP DỤNG VOUCHER
+      const sourceConfig = sources[item.sourceIndex - 1];
+      let finalPrice = item.gia;
+      
+      // Nếu là SHOPEE và có voucherPercent, thì giảm giá
+      if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
+        finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
+        // Làm tròn giá cho đẹp
+        finalPrice = Math.round(finalPrice / 100) * 100;
+      }
+
       const currentPrice = groups[groupKey].prices[item.sourceIndex];
-      if (!currentPrice || (item.gia > 0 && item.gia < currentPrice)) {
-          groups[groupKey].prices[item.sourceIndex] = item.gia;
+      // Logic chọn giá: Ưu tiên giá mới nếu chưa có hoặc giá thấp hơn
+      if (!currentPrice || (finalPrice > 0 && finalPrice < currentPrice)) {
+          groups[groupKey].prices[item.sourceIndex] = finalPrice;
           groups[groupKey].urls[item.sourceIndex] = item.productUrl;
       }
       
@@ -335,14 +368,22 @@ const App: React.FC = () => {
         if (a.plCombo !== b.plCombo) return a.plCombo.localeCompare(b.plCombo);
         return a.displayName.localeCompare(b.displayName);
     });
-  }, [results, searchTerm, showDuplicatesOnly, typeFilter]);
+  }, [results, searchTerm, showDuplicatesOnly, typeFilter, sources]); // IMPORTANT: Depend on 'sources' to re-calc when voucher changes
 
   const stats = useMemo(() => {
     const allGroups: Record<string, any> = {};
     results.forEach(item => {
         const k = (item.normalizedName || item.sanPham).trim();
         if(!allGroups[k]) allGroups[k] = { prices: {} };
-        allGroups[k].prices[item.sourceIndex] = item.gia;
+        
+        // Cần tính lại giá trong Stats theo Voucher
+        const sourceConfig = sources[item.sourceIndex - 1];
+        let finalPrice = item.gia;
+        if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
+            finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
+        }
+
+        allGroups[k].prices[item.sourceIndex] = finalPrice;
     });
     const allGroupList = Object.values(allGroups);
     const totalRaw = results.length;
@@ -671,7 +712,15 @@ const App: React.FC = () => {
                       <th className="px-6 py-8 text-[11px] font-black uppercase text-slate-400 tracking-widest text-center">Phân Loại</th>
                       {sources.map((src, i) => (
                         <th key={i} className="px-6 py-8 text-[11px] font-black uppercase text-indigo-600 tracking-widest text-center border-l border-slate-100 bg-indigo-50/10">
-                          {src.name.toUpperCase()}
+                          <div className="flex flex-col items-center">
+                            <span>{src.name.toUpperCase()}</span>
+                            {/* HIỂN THỊ BADGE VOUCHER NẾU CÓ */}
+                            {src.name.toUpperCase().includes('SHOPEE') && src.voucherPercent && src.voucherPercent > 0 && (
+                                <span className="mt-1 text-[9px] bg-orange-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                                    -{src.voucherPercent}%
+                                </span>
+                            )}
+                          </div>
                         </th>
                       ))}
                       <th className="px-10 py-8 text-[11px] font-black uppercase text-rose-500 tracking-widest text-center border-l border-slate-100 bg-rose-50/10">Chênh Lệch</th>
