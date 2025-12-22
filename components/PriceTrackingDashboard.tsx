@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TrackingProduct } from '../types';
 import { 
   TrendingUp, TrendingDown, Clock, ExternalLink, 
-  Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle, Loader2
+  Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle, Loader2, Minus
 } from 'lucide-react';
 import { refreshAllPrices } from '../services/trackingService';
 
@@ -19,7 +19,7 @@ const AUTO_SCAN_INTERVAL_MINUTES = 60; // Quét thật mỗi 60 phút (theo yêu
 
 // --- HELPER COMPONENTS ---
 const MiniSparkline = ({ history, color }: { history: any[], color: string }) => {
-    if (!history || history.length < 2) return <div className="h-8 w-16 bg-slate-50 rounded opacity-50"></div>;
+    if (!history || history.length < 2) return <div className="h-8 w-16 bg-slate-700/30 rounded opacity-30"></div>;
     const prices = history.slice(-7).map(h => h.avgPrice || h.price);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
@@ -33,14 +33,14 @@ const MiniSparkline = ({ history, color }: { history: any[], color: string }) =>
 
     return (
         <svg width="60" height="30" className="overflow-visible">
-            <polyline fill="none" stroke={color} strokeWidth="1.5" points={points} strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx={(prices.length-1) * (60/(prices.length-1))} cy={30 - ((prices[prices.length-1] - min) / range) * 20 - 5} r="2" fill={color} />
+            <polyline fill="none" stroke={color} strokeWidth="2" points={points} strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx={(prices.length-1) * (60/(prices.length-1))} cy={30 - ((prices[prices.length-1] - min) / range) * 20 - 5} r="2.5" fill={color} />
         </svg>
     );
 };
 
 const PriceCell = ({ data }: { data: any }) => {
-    if (!data) return <div className="text-center text-slate-300">-</div>;
+    if (!data) return <div className="text-center text-slate-600 font-mono">-</div>;
     
     const currentPrice = data.price;
     const history = data.history || [];
@@ -49,28 +49,48 @@ const PriceCell = ({ data }: { data: any }) => {
     const diff = currentPrice - prevPrice;
     const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
     
-    const colorClass = diff > 0 
-        ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
-        : diff < 0 
-            ? 'text-rose-600 bg-rose-50 border-rose-100'
-            : 'text-slate-700 bg-transparent border-transparent';
+    // Logic màu mới cho Dark Mode:
+    // Tăng -> Xanh (Emerald 400)
+    // Giảm -> Đỏ (Rose 400)
+    // Không đổi -> Vàng (Yellow 400)
+    let colorClass = '';
+    let arrowIcon = null;
+    let containerClass = '';
 
-    const arrowIcon = diff > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />;
+    if (diff > 0) {
+        // TĂNG
+        colorClass = 'text-emerald-400';
+        containerClass = 'bg-emerald-500/10 border-emerald-500/20 shadow-[0_0_15px_rgba(52,211,153,0.15)]';
+        arrowIcon = <TrendingUp className="w-3 h-3 text-emerald-400" />;
+    } else if (diff < 0) {
+        // GIẢM
+        colorClass = 'text-rose-400';
+        containerClass = 'bg-rose-500/10 border-rose-500/20 shadow-[0_0_15px_rgba(251,113,133,0.15)]';
+        arrowIcon = <TrendingDown className="w-3 h-3 text-rose-400" />;
+    } else {
+        // KHÔNG ĐỔI
+        colorClass = 'text-yellow-400';
+        containerClass = 'bg-yellow-500/5 border-yellow-500/10'; // Nền vàng rất nhẹ
+        arrowIcon = <Minus className="w-3 h-3 text-yellow-500/50" />;
+    }
 
     return (
-        <div className={`flex flex-col items-end justify-center p-2 rounded-lg border transition-all duration-500 ${colorClass}`}>
-            <div className="text-[13px] font-black tracking-tighter flex items-center gap-1">
-                {diff !== 0 && arrowIcon}
+        <div className={`flex flex-col items-end justify-center p-2.5 rounded-xl border transition-all duration-300 ${containerClass}`}>
+            <div className={`text-[13px] font-black tracking-tighter flex items-center gap-1.5 ${colorClass}`}>
+                {arrowIcon}
                 {currentPrice.toLocaleString()}đ
             </div>
             {diff !== 0 ? (
-                <div className="text-[9px] font-bold opacity-80 flex items-center gap-1">
-                    <span className="line-through text-slate-400">{prevPrice.toLocaleString()}</span>
-                    <span>({diff > 0 ? '+' : ''}{percent.toFixed(1)}%)</span>
+                <div className="text-[10px] font-bold opacity-80 flex items-center gap-1 mt-0.5 text-slate-400">
+                    <span className="line-through opacity-50">{prevPrice.toLocaleString()}</span>
+                    <span className={`${diff > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        ({diff > 0 ? '+' : ''}{percent.toFixed(1)}%)
+                    </span>
                 </div>
             ) : (
-                <div className="text-[9px] font-bold text-slate-400 opacity-60">
-                   {history.length > 0 ? `Lần cuối: ${history[history.length-1].logs?.slice(-1)[0]?.time || 'Hôm nay'}` : 'Chưa cập nhật'}
+                <div className="text-[9px] font-bold text-slate-500 mt-0.5 flex items-center gap-1">
+                   <Clock className="w-2.5 h-2.5" />
+                   {history.length > 0 ? `Cập nhật: ${history[history.length-1].logs?.slice(-1)[0]?.time || 'Hôm nay'}` : 'Chưa có log'}
                 </div>
             )}
         </div>
