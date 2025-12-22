@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
@@ -20,11 +21,13 @@ const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
 const SourceInputCard = memo(({ 
   source, 
   index, 
-  onUpdate 
+  onUpdate,
+  onFocusInput
 }: { 
   source: SourceConfig, 
   index: number, 
-  onUpdate: (idx: number, field: keyof SourceConfig, val: any) => void 
+  onUpdate: (idx: number, field: keyof SourceConfig, val: any) => void,
+  onFocusInput: (idx: number) => void
 }) => {
   const htmlInputRef = useRef<HTMLTextAreaElement>(null);
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
@@ -49,6 +52,7 @@ const SourceInputCard = memo(({
            <input 
             type="text" 
             defaultValue={source.name} 
+            onFocus={() => onFocusInput(index)}
             onBlur={(e) => onUpdate(index, 'name', e.target.value)}
             className="bg-transparent border-none p-0 text-xs font-black uppercase tracking-widest text-slate-700 outline-none w-full focus:text-indigo-600 transition-colors"
            />
@@ -63,6 +67,7 @@ const SourceInputCard = memo(({
                min="0"
                max="100"
                defaultValue={source.voucherPercent || ''}
+               onFocus={() => onFocusInput(index)}
                onChange={(e) => onUpdate(index, 'voucherPercent', Number(e.target.value))}
                className="w-16 bg-transparent text-[10px] font-bold text-orange-600 placeholder:text-orange-300 outline-none text-right"
              />
@@ -70,12 +75,13 @@ const SourceInputCard = memo(({
           </div>
         )}
 
-        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập</span>}
+        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập {source.urls.filter(u=>u).length} link</span>}
       </div>
       <div className="space-y-4">
         <textarea 
           ref={urlsInputRef}
           defaultValue={source.urls.join('\n')}
+          onFocus={() => onFocusInput(index)}
           onBlur={(e) => onUpdate(index, 'urls', e.target.value.split('\n'))}
           placeholder="Dán danh sách URL (mỗi dòng 1 link)..."
           className="w-full p-5 h-32 bg-slate-50 border border-slate-100 rounded-3xl text-[11px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all"
@@ -84,6 +90,7 @@ const SourceInputCard = memo(({
             <textarea 
               ref={htmlInputRef}
               defaultValue={source.htmlHint}
+              onFocus={() => onFocusInput(index)}
               onBlur={(e) => onUpdate(index, 'htmlHint', e.target.value)}
               placeholder="Paste HTML Code (Body) vào đây..."
               className="w-full p-5 h-40 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600"
@@ -119,6 +126,10 @@ const ScraperWorkspace: React.FC = () => {
       return { name: names[i], urls: [''], htmlHint: '' };
     })
   );
+  
+  // Ref để theo dõi ô nhập liệu đang được focus
+  const focusedSourceIdxRef = useRef<number | null>(null);
+
   const [results, setResults] = useState<ProductData[]>([]);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [normalizationStatus, setNormalizationStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -223,19 +234,47 @@ const ScraperWorkspace: React.FC = () => {
 
          setSources(prev => {
             const next = [...prev];
-            let idx = next.findIndex(s => s.name.toUpperCase() === targetName);
-            if (idx === -1) {
-                idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+            let idx = -1;
+
+            // 1. ƯU TIÊN Ô ĐANG ĐƯỢC FOCUS (Nếu người dùng đang click vào input)
+            if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < next.length) {
+                idx = focusedSourceIdxRef.current;
+                typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
+            } 
+            // 2. Nếu không focus, tìm theo tên sàn
+            else {
+                idx = next.findIndex(s => s.name.toUpperCase() === targetName);
+                // 3. Nếu không thấy tên sàn, tìm ô trống
+                if (idx === -1) {
+                    idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+                }
+                // 4. Fallback về ô đầu tiên
+                if (idx === -1) idx = 0;
+                typeLog(`[AUTO-FILL] Auto Detect: Nhập vào ô số ${idx + 1} (${next[idx].name})`, 'matrix');
             }
-            if (idx === -1) idx = 0;
+            
+            // --- LOGIC APPEND (KHÔNG XÓA DỮ LIỆU CŨ) ---
+            const currentUrls = next[idx].urls || [];
+            // Chỉ thêm URL nếu chưa tồn tại
+            const newUrls = currentUrls.includes(url) 
+                ? currentUrls 
+                : [...currentUrls.filter(u => u.trim() !== ''), url];
+
+            const currentHtml = next[idx].htmlHint || "";
+            // Nối HTML mới vào sau HTML cũ (Dùng separator để dễ nhìn hoặc xử lý sau này)
+            // Lưu ý: Gemini có thể xử lý context lớn, việc nối chuỗi này giúp gom nhiều page.
+            const newHtml = currentHtml 
+                ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
+                : html;
 
             next[idx] = {
                 ...next[idx],
-                name: targetName || next[idx].name, 
-                htmlHint: html, 
-                urls: [url] 
+                name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName && idx !== focusedSourceIdxRef.current 
+                    ? targetName 
+                    : next[idx].name, 
+                htmlHint: newHtml, 
+                urls: newUrls 
             };
-            typeLog(`[AUTO-FILL] Đã điền dữ liệu vào ô nguồn số ${idx + 1} (${next[idx].name})`, 'matrix');
             return next;
          });
       }
@@ -355,6 +394,10 @@ const ScraperWorkspace: React.FC = () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
       if (validUrls.length > 0) {
+        // --- LOGIC MỚI: Xử lý nhiều URL cho 1 Source ---
+        // Vì HTML hint hiện tại đang bị gộp chung (concatenated), ta cần cách xử lý thông minh hơn.
+        // Hiện tại: Gửi toàn bộ cục HTML Hints khổng lồ cho mỗi URL. 
+        // Gemini sẽ tự lọc sản phẩm trong HTML khớp với context.
         return validUrls.map(url => ({ src, srcIdx, url, html: src.htmlHint }));
       }
       if (src.htmlHint.trim().length > 50) {
@@ -374,7 +417,7 @@ const ScraperWorkspace: React.FC = () => {
     
     let completed = 0;
     for (const task of activeTasks) {
-      typeLog(`[START] ${task.src.name} -> Bóc tách thô...`, 'info');
+      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Link: ${task.url.substring(0, 30)}...)...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
         if (rawItems.length > 0) {
@@ -751,7 +794,8 @@ const ScraperWorkspace: React.FC = () => {
                   key={idx} 
                   index={idx} 
                   source={src} 
-                  onUpdate={updateSource} 
+                  onUpdate={updateSource}
+                  onFocusInput={(i) => focusedSourceIdxRef.current = i}
                 />
               ))}
             </div>
