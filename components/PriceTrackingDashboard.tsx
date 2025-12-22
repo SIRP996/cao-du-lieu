@@ -163,11 +163,16 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
   const sourceColumns = useMemo(() => {
       const sources = new Set<string>();
       localData.forEach(p => Object.keys(p.sources).forEach(s => sources.add(s)));
+      
       const priority = ['shopee', 'lazada', 'tiki', 'tiktok', 'web'];
+      
       return Array.from(sources).sort((a, b) => {
-          const idxA = priority.indexOf(a) !== -1 ? priority.indexOf(a) : 99;
-          const idxB = priority.indexOf(b) !== -1 ? priority.indexOf(b) : 99;
-          return idxA - idxB;
+          // So sánh không phân biệt hoa thường để tìm trong priority
+          const idxA = priority.indexOf(a.toLowerCase()) !== -1 ? priority.indexOf(a.toLowerCase()) : 99;
+          const idxB = priority.indexOf(b.toLowerCase()) !== -1 ? priority.indexOf(b.toLowerCase()) : 99;
+          
+          if (idxA !== idxB) return idxA - idxB; // Sắp xếp theo ưu tiên sàn TMĐT
+          return a.localeCompare(b); // Nếu cùng độ ưu tiên (vd cùng là web khác), sắp xếp alpha
       }).slice(0, 5);
   }, [localData]);
 
@@ -296,7 +301,9 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                                 </td>
 
                                 {sourceColumns.map((colKey, i) => {
-                                    const actualKey = Object.keys(product.sources).find(k => k.toLowerCase().includes(colKey)) || colKey;
+                                    // Tìm key chính xác trong product.sources (phân biệt hoa thường)
+                                    // Vì colKey có thể là "Lazada" nhưng trong DB cũ là "lazada", hoặc ngược lại
+                                    const actualKey = Object.keys(product.sources).find(k => k.toLowerCase() === colKey.toLowerCase()) || colKey;
                                     const sourceData = product.sources[actualKey];
                                     return (
                                         <td key={i} className="p-4 border-l border-slate-700/50 bg-slate-800/10">

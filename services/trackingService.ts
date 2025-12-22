@@ -38,11 +38,16 @@ export const syncScrapedDataToTracking = (
         const config = sourceConfigs[item.sourceIndex - 1];
         if (!config) return;
         
-        let sourceKey = config.name.toLowerCase();
-        if (sourceKey.includes('shopee')) sourceKey = 'shopee';
-        else if (sourceKey.includes('lazada')) sourceKey = 'lazada';
-        else if (sourceKey.includes('tiki')) sourceKey = 'tiki';
-        else sourceKey = `source_${item.sourceIndex}`;
+        // LOGIC TÊN NGUỒN: Ưu tiên tên người dùng đặt
+        let sourceKey = config.name.trim();
+        const lowerName = sourceKey.toLowerCase();
+        
+        if (lowerName.includes('shopee')) sourceKey = 'Shopee';
+        else if (lowerName.includes('lazada')) sourceKey = 'Lazada';
+        else if (lowerName.includes('tiki')) sourceKey = 'Tiki';
+        else if (lowerName.includes('tiktok')) sourceKey = 'TikTok';
+        
+        if (!sourceKey) sourceKey = `Source ${item.sourceIndex}`;
 
         let finalPrice = item.gia;
         if (config.name.toUpperCase().includes('SHOPEE') && config.voucherPercent) {

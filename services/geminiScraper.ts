@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProductData } from "../types";
 
@@ -110,17 +111,37 @@ const preProcessHtml = (rawHtml: string): string => {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- URL RESOLVER HELPER ---
-// Hàm này đảm bảo link luôn là tuyệt đối (https://...)
 const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   if (!rawUrl) return baseUrl;
   try {
-    // Nếu rawUrl đã là tuyệt đối (http...), new URL sẽ giữ nguyên nó
-    // Nếu rawUrl là tương đối (/product...), new URL sẽ nối với baseUrl
     return new URL(rawUrl, baseUrl).href;
   } catch (e) {
-    // Trường hợp tệ nhất, trả về rawUrl (hoặc có thể trả về baseUrl nếu muốn an toàn tuyệt đối)
     return rawUrl;
   }
+};
+
+// --- QUANTITY EXTRACTION HELPER (NÂNG CẤP) ---
+const extractQuantity = (rawName: string): number => {
+  const clean = rawName.toLowerCase();
+  
+  // 1. Case: "Combo 2", "Bộ 3", "Set 5", "Mua 2", "SL 2", "Số lượng 2"
+  // Regex bắt: từ khóa + dấu câu tùy chọn (:.-) + khoảng trắng + số
+  const prefixMatch = clean.match(/\b(combo|bộ|set|mua|sl|số lượng)\s*[:.-]*\s*(\d+)/);
+  if (prefixMatch && prefixMatch[2]) return parseInt(prefixMatch[2]);
+  
+  // 2. Case: "x2", "x 3", "(x2)", "[x3]" (thường ở cuối hoặc trong ngoặc)
+  // Regex bắt: ký tự x + khoảng trắng (tùy chọn) + số
+  const xMatch = clean.match(/[\s\(\[][xX]\s*(\d+)\b/);
+  if (xMatch && xMatch[1]) return parseInt(xMatch[1]);
+  
+  // 3. Case đặc biệt: "Mua 1 tặng 1" -> Hiểu là 2
+  if (clean.includes("mua 1 tặng 1") || clean.includes("mua 1 tang 1")) return 2;
+
+  // 4. Case đầu câu: "2 chai", "2 lọ", "3 hộp"
+  const startMatch = clean.match(/^(\d+)\s*(chai|lọ|hộp|túi|miếng|cái)/);
+  if (startMatch && startMatch[1]) return parseInt(startMatch[1]);
+
+  return 1;
 };
 
 // --- ALGORITHMIC LOGIC ---
@@ -137,6 +158,7 @@ const calculateMatchScore = (rawName: string, officialName: string) => {
 };
 
 const normalizeProductAlgorithm = (rawName: string) => {
+  // 1. Tìm sản phẩm trong từ điển
   const matches: { name: string, score: number }[] = [];
   OFFICIAL_NAMES.forEach(officialName => {
     const score = calculateMatchScore(rawName, officialName);
@@ -144,6 +166,7 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
   matches.sort((a, b) => b.score - a.score || b.name.length - a.name.length);
   
+  // Lọc trùng lặp
   const uniqueProducts = new Set<string>();
   matches.forEach(m => {
     let isSubset = false;
@@ -160,30 +183,63 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
 
   const finalProducts = Array.from(uniqueProducts);
+  
+  // 2. Logic xác định tên chuẩn
   let normalizedName = rawName, plCombo = "Lẻ", phanLoaiTong = "Khác", phanLoaiChiTiet = "Khác";
 
   if (finalProducts.length === 1) {
+    // TÌM THẤY 1 SẢN PHẨM KHỚP
     normalizedName = finalProducts[0];
     plCombo = "Lẻ";
-    // Heuristic mapping (giản lược)
+    
+    // Phân loại cơ bản
     if (normalizedName.includes("tẩy trang")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Tẩy trang"; }
     else if (normalizedName.includes("rửa mặt")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Sữa rửa mặt"; }
-    // ... thêm logic mapping nếu cần
+    else if (normalizedName.includes("mặt nạ")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Mặt nạ"; }
+    else if (normalizedName.includes("tinh chất") || normalizedName.includes("serum")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Serum"; }
+    
+    // --- CHECK SỐ LƯỢNG (NEW - UPDATED) ---
+    const qty = extractQuantity(rawName);
+    if (qty > 1) {
+       const prefix = `Combo ${qty}`;
+       // ÉP BUỘC THÊM TIỀN TỐ NẾU CHƯA CÓ
+       // Logic cũ: if (!normalizedName...) -> Logic mới: Luôn luôn ghép nếu phát hiện số lượng
+       normalizedName = `${prefix} ${finalProducts[0]}`;
+       plCombo = prefix;
+       phanLoaiTong = "Combo";
+       phanLoaiChiTiet = "Bộ sản phẩm";
+    } else {
+       // Nếu không tìm thấy số nhưng có chữ Combo -> Gán là Combo chung chung
+       if (/\b(combo|bộ|set)\b/i.test(rawName)) {
+           normalizedName = `Combo ${finalProducts[0]}`;
+           plCombo = "Combo";
+           phanLoaiTong = "Combo";
+       }
+    }
+
   } else if (finalProducts.length > 1) {
+    // TÌM THẤY NHIỀU SẢN PHẨM KHỚP -> COMBO HỖN HỢP
     normalizedName = finalProducts.sort().join(" + ");
     plCombo = `Combo ${finalProducts.length}`;
     phanLoaiTong = "Combo";
     phanLoaiChiTiet = "Bộ sản phẩm";
-  }
-
-  if (/combo|bộ|set|mua.*tặng/i.test(rawName) && finalProducts.length <= 1) {
-     if (plCombo === "Lẻ") plCombo = "Combo (Raw)";
+  } else {
+    // KHÔNG TÌM THẤY TRONG TỪ ĐIỂN
+    // Vẫn cố gắng check xem có phải Combo không dựa trên tên gốc
+    const qty = extractQuantity(rawName);
+    if (qty > 1) {
+        plCombo = `Combo ${qty}`;
+        phanLoaiTong = "Combo";
+    } else if (/combo|bộ|set|mua.*tặng/i.test(rawName)) {
+        plCombo = "Combo (Raw)";
+        phanLoaiTong = "Combo";
+    }
   }
 
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC ---
+// --- AI LOGIC (GIỮ NGUYÊN) ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
   const ai = getAIClient(); // Lazy init
@@ -194,7 +250,8 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
     
     YÊU CẦU:
     1. Xác định "Lẻ" hay "Combo".
-    2. Chuẩn hóa tên theo Dictionary. Nếu là Combo, tách ra và nối bằng " + ".
+    2. Nếu là Combo cùng loại (ví dụ: Combo 2 chai...), hãy thêm tiền tố "Combo X" vào tên chuẩn.
+    3. Chuẩn hóa tên theo Dictionary. Nếu là Combo nhiều loại khác nhau, tách ra và nối bằng " + ".
     
     Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
     

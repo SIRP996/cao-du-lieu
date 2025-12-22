@@ -1,3 +1,4 @@
+
 import { db } from '../firebase/config';
 import { ProductData, TrackingProduct, SourceConfig, Project } from '../types';
 
@@ -117,12 +118,18 @@ export const saveScrapedDataToFirestore = async (
         const config = sourceConfigs[item.sourceIndex - 1];
         if (!config) return;
 
-        let sourceKey = 'web';
-        const lowerName = config.name.toLowerCase();
-        if (lowerName.includes('shopee')) sourceKey = 'shopee';
-        else if (lowerName.includes('lazada')) sourceKey = 'lazada';
-        else if (lowerName.includes('tiki')) sourceKey = 'tiki';
-        else sourceKey = `source_${item.sourceIndex}`;
+        // LOGIC TÊN NGUỒN MỚI: Giữ nguyên tên người dùng nhập
+        let sourceKey = config.name.trim(); 
+        const lowerName = sourceKey.toLowerCase();
+
+        // Chuẩn hóa một số sàn lớn để hiển thị đẹp hơn, còn lại giữ nguyên
+        if (lowerName.includes('shopee')) sourceKey = 'Shopee';
+        else if (lowerName.includes('lazada')) sourceKey = 'Lazada';
+        else if (lowerName.includes('tiki')) sourceKey = 'Tiki';
+        else if (lowerName.includes('tiktok')) sourceKey = 'TikTok';
+        
+        // Nếu tên rỗng thì mới dùng source_index
+        if (!sourceKey) sourceKey = `Source ${item.sourceIndex}`;
 
         let finalPrice = item.gia;
         if (config.name.toUpperCase().includes('SHOPEE') && config.voucherPercent) {
