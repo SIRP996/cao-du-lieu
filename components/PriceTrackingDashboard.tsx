@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TrackingProduct } from '../types';
 import { 
   TrendingUp, TrendingDown, Clock, ExternalLink, 
-  Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle
+  Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle, Loader2
 } from 'lucide-react';
 import { refreshAllPrices } from '../services/trackingService';
 
@@ -115,7 +115,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
       
       setIsScanning(true);
       setScanProgress(0);
-      setScanMessage("Đang khởi động bot...");
+      setScanMessage("Đang khởi động...");
 
       try {
           // Gọi service quét thật
@@ -154,20 +154,30 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 p-4 md:p-6 animate-in fade-in duration-500 font-sans relative">
       
-      {/* SCANNING OVERLAY */}
+      {/* SCANNING TOAST (NON-BLOCKING) */}
       {isScanning && (
-          <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-end justify-center p-6 md:p-10 pointer-events-none">
-              <div className="bg-white text-slate-900 p-6 rounded-2xl shadow-2xl w-full max-w-lg animate-in slide-in-from-bottom-10 border border-indigo-200">
-                  <div className="flex justify-between items-center mb-3">
-                      <h4 className="font-black uppercase text-indigo-600 text-xs tracking-widest flex items-center gap-2">
-                          <RefreshCw className="w-4 h-4 animate-spin" /> Đang cập nhật giá thật...
-                      </h4>
-                      <span className="font-bold text-xs">{scanProgress}%</span>
+          <div className="fixed bottom-6 right-6 z-[100] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300 pointer-events-auto">
+              <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                      <div className="relative">
+                          <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
+                          <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
+                              <RefreshCw className="w-5 h-5 animate-spin" />
+                          </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                          <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Đang Quét Giá...</h4>
+                          <p className="text-[10px] text-slate-500 font-bold truncate pr-2">{scanMessage}</p>
+                      </div>
                   </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
-                      <div className="bg-indigo-600 h-full transition-all duration-300" style={{width: `${scanProgress}%`}}></div>
-                  </div>
-                  <p className="text-[10px] text-slate-500 font-bold truncate">{scanMessage}</p>
+                  <span className="text-xs font-black text-indigo-600">{scanProgress}%</span>
+              </div>
+              
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{width: `${scanProgress}%`}}
+                  ></div>
               </div>
           </div>
       )}
@@ -212,10 +222,10 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
              <button 
                 onClick={handleRealScan}
                 disabled={isScanning}
-                className={`flex items-center gap-3 px-6 py-3 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-lg ${isScanning ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-900/50'}`}
+                className={`flex items-center gap-3 px-6 py-3 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-lg ${isScanning ? 'bg-indigo-900/50 text-indigo-400 cursor-not-allowed border border-indigo-800' : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-900/50'}`}
              >
                 {isScanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-                {isScanning ? 'Đang quét...' : 'Cập nhật giá ngay'}
+                {isScanning ? 'Đang chạy nền...' : 'Cập nhật giá ngay'}
              </button>
 
              <div className="relative flex-1 md:w-56">
