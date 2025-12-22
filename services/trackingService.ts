@@ -1,59 +1,25 @@
 
 import { ProductData, TrackingProduct, SourceConfig, DailyHistory, PriceLog } from "../types";
+import { db } from '../firebase/config';
+import { parseRawProducts } from './geminiScraper'; // Dùng lại hàm AI bóc tách giá
 
 const TRACKING_STORAGE_KEY = 'super_scraper_tracking_db_v1';
+const COLLECTION_NAME = 'tracked_products';
 
-// Hàm helper để tạo giờ (0h, 2h, ... 22h)
-const getHourSlots = () => {
-  const slots = [];
-  for (let i = 0; i <= 22; i += 2) {
-    slots.push(i.toString().padStart(2, '0') + ":00");
-  }
-  return slots;
-};
+// Helper: Proxy để vượt qua CORS khi fetch từ trình duyệt
+// Lưu ý: Các free proxy này có thể không ổn định 100% với Shopee/Lazada do bot detection.
+// Khuyến nghị: Sử dụng Extension để lấy HTML thì ổn định hơn, nhưng đây là giải pháp "Auto" tốt nhất trên web client.
+const PROXY_URL = "https://api.allorigins.win/raw?url="; 
 
-// Hàm tạo dữ liệu giả sử lịch sử 7 ngày (Để demo biểu đồ)
-const generateMockHistory = (currentPrice: number): DailyHistory[] => {
-  const history: DailyHistory[] = [];
-  const slots = getHourSlots();
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const dateStr = `${d.getDate()}/${d.getMonth() + 1}`;
-    
-    // Biến động giá ngẫu nhiên +/- 10%
-    const variation = 1 + (Math.random() * 0.2 - 0.1); 
-    const dayBasePrice = Math.round(currentPrice * variation / 1000) * 1000;
-    
-    const logs: PriceLog[] = slots.map(time => {
-       // Biến động nhỏ trong ngày
-       const hourVar = 1 + (Math.random() * 0.02 - 0.01);
-       return {
-         time,
-         price: Math.round(dayBasePrice * hourVar / 1000) * 1000
-       };
-    });
-
-    history.push({
-      date: dateStr,
-      avgPrice: dayBasePrice,
-      logs
-    });
-  }
-  return history;
-};
-
-// --- CORE FUNCTION: Chuyển đổi từ Scraper Data -> Tracking DB Schema ---
+// --- CORE FUNCTION: Sync Data ---
 export const syncScrapedDataToTracking = (
   scrapedProducts: ProductData[], 
-  sourceConfigs: SourceConfig[]
+  sourceConfigs: SourceConfig[],
+  projectId: string = 'local_default'
 ): TrackingProduct[] => {
-  // 1. Load DB cũ
   const existingJson = localStorage.getItem(TRACKING_STORAGE_KEY);
   let db: Record<string, TrackingProduct> = existingJson ? JSON.parse(existingJson) : {};
 
-  // 2. Group Scraped Data theo Normalized Name
   const grouped: Record<string, ProductData[]> = {};
   scrapedProducts.forEach(p => {
     const key = p.normalizedName || p.sanPham;
@@ -61,17 +27,11 @@ export const syncScrapedDataToTracking = (
     grouped[key].push(p);
   });
 
-  // 3. Update DB
   Object.entries(grouped).forEach(([name, items]) => {
     const sku = "SKU-" + Math.random().toString(36).substr(2, 6).toUpperCase();
     const existingProduct = Object.values(db).find(p => p.name === name);
-    
     const productId = existingProduct ? existingProduct.id : sku;
-    
-    // Xác định Category (Lấy item đầu tiên)
     const category = items[0].phanLoaiChiTiet || "Chưa phân loại";
-
-    // Xây dựng Sources Object
     const sourcesData: Record<string, any> = existingProduct ? { ...existingProduct.sources } : {};
 
     items.forEach(item => {
@@ -79,44 +39,51 @@ export const syncScrapedDataToTracking = (
         if (!config) return;
         
         let sourceKey = config.name.toLowerCase();
-        // Chuẩn hóa key (shopee, lazada...)
         if (sourceKey.includes('shopee')) sourceKey = 'shopee';
         else if (sourceKey.includes('lazada')) sourceKey = 'lazada';
         else if (sourceKey.includes('tiki')) sourceKey = 'tiki';
-        else if (sourceKey.includes('hasaki')) sourceKey = 'web';
-        else sourceKey = 'web';
+        else sourceKey = `source_${item.sourceIndex}`;
 
-        // Tính giá sau voucher (nếu có)
         let finalPrice = item.gia;
         if (config.name.toUpperCase().includes('SHOPEE') && config.voucherPercent) {
             finalPrice = item.gia * (1 - config.voucherPercent / 100);
         }
 
-        // Nếu nguồn này chưa có lịch sử -> Tạo fake history dựa trên giá hiện tại
-        // Nếu đã có -> Thêm log mới vào ngày hôm nay (Logic đơn giản hóa cho demo)
+        const todayStr = new Date().toLocaleDateString('vi-VN'); // dd/mm/yyyy
+
         if (!sourcesData[sourceKey]) {
             sourcesData[sourceKey] = {
                 price: finalPrice,
                 url: item.productUrl || item.url,
-                history: generateMockHistory(finalPrice)
+                history: [{
+                    date: todayStr,
+                    avgPrice: finalPrice,
+                    logs: [{ time: new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'}), price: finalPrice }]
+                }]
             };
         } else {
             // Update giá mới nhất
             sourcesData[sourceKey].price = finalPrice;
-            // Trong thực tế sẽ push vào logs, ở đây mình giữ nguyên history cũ và cập nhật giá hôm nay
-            const today = new Date();
-            const dateStr = `${today.getDate()}/${today.getMonth() + 1}`;
             const history = sourcesData[sourceKey].history;
-            const todayLog = history.find((h: any) => h.date === dateStr);
+            const todayLog = history.find((h: any) => h.date === todayStr);
+            
             if(todayLog) {
-                 todayLog.avgPrice = finalPrice; // Update giá
+                 todayLog.avgPrice = finalPrice; 
+                 todayLog.logs.push({ time: new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'}), price: finalPrice });
+            } else {
+                 history.push({
+                    date: todayStr,
+                    avgPrice: finalPrice,
+                    logs: [{ time: new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'}), price: finalPrice }]
+                 });
+                 if(history.length > 30) history.shift();
             }
         }
     });
 
     db[productId] = {
         id: productId,
-        projectId: existingProduct?.projectId || 'local_storage', // Default for local storage
+        projectId: existingProduct?.projectId || projectId,
         name: name,
         category: category,
         lastUpdated: new Date().toISOString(),
@@ -124,10 +91,103 @@ export const syncScrapedDataToTracking = (
     };
   });
 
-  // 4. Save DB
   const resultArray = Object.values(db);
   localStorage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(db));
   return resultArray;
+};
+
+// --- REAL PRICE UPDATE ENGINE ---
+export const refreshAllPrices = async (
+    products: TrackingProduct[],
+    onProgress: (msg: string, percent: number) => void
+): Promise<TrackingProduct[]> => {
+    
+    const updatedProducts = [...products];
+    const totalItems = products.length;
+    let processed = 0;
+
+    for (let i = 0; i < totalItems; i++) {
+        const product = updatedProducts[i];
+        const newSources = { ...product.sources };
+        let productChanged = false;
+
+        onProgress(`Đang quét: ${product.name}...`, Math.round((i / totalItems) * 100));
+
+        // Duyệt qua từng nguồn (Shopee, Lazada...) của sản phẩm này
+        const sourceKeys = Object.keys(newSources);
+        for (const sourceKey of sourceKeys) {
+            const sourceData = newSources[sourceKey];
+            const url = sourceData.url;
+
+            if (!url || url.length < 5) continue;
+
+            try {
+                // 1. FETCH HTML VIA PROXY (Để tránh CORS)
+                // Lưu ý: Shopee thường chặn request không có header chuẩn. 
+                // Ở đây ta cố gắng fetch, nếu thất bại Gemini có thể không tìm thấy giá.
+                const response = await fetch(PROXY_URL + encodeURIComponent(url));
+                if (!response.ok) throw new Error("Fetch failed");
+                const html = await response.text();
+
+                if (html && html.length > 1000) {
+                    // 2. Dùng hàm parseRawProducts (có Gemini AI) để soi giá từ HTML
+                    // sourceIndex = 1 (dummy)
+                    const extractedItems = await parseRawProducts(url, html, 1);
+                    
+                    if (extractedItems.length > 0 && extractedItems[0].gia > 0) {
+                        const newPrice = extractedItems[0].gia;
+                        const oldPrice = sourceData.price;
+
+                        if (newPrice !== oldPrice) {
+                            productChanged = true;
+                            sourceData.price = newPrice;
+                            
+                            // Ghi Log lịch sử
+                            const todayStr = new Date().toLocaleDateString('vi-VN');
+                            const history = [...sourceData.history];
+                            const todayLog = history.find(h => h.date === todayStr);
+                            
+                            const timeStr = new Date().toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'});
+
+                            if (todayLog) {
+                                todayLog.avgPrice = newPrice;
+                                todayLog.logs.push({ time: timeStr, price: newPrice });
+                            } else {
+                                history.push({
+                                    date: todayStr,
+                                    avgPrice: newPrice,
+                                    logs: [{ time: timeStr, price: newPrice }]
+                                });
+                                if (history.length > 30) history.shift();
+                            }
+                            sourceData.history = history;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn(`Lỗi cập nhật ${product.name} [${sourceKey}]:`, error);
+                // Nếu lỗi, giữ nguyên giá cũ
+            }
+            
+            // Delay nhẹ để tránh bị chặn IP quá gắt
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
+        if (productChanged) {
+            product.lastUpdated = new Date().toISOString();
+            updatedProducts[i] = { ...product, sources: newSources };
+            
+            // Cập nhật ngay vào LocalStorage để an toàn
+            const db = JSON.parse(localStorage.getItem(TRACKING_STORAGE_KEY) || '{}');
+            db[product.id] = updatedProducts[i];
+            localStorage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(db));
+        }
+        
+        processed++;
+    }
+
+    onProgress("Hoàn tất!", 100);
+    return updatedProducts;
 };
 
 export const getTrackingProducts = (): TrackingProduct[] => {
