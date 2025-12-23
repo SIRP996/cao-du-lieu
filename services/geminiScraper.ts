@@ -2,20 +2,74 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProductData } from "../types";
 
-// Hàm khởi tạo AI an toàn, chỉ chạy khi cần dùng
-const getAIClient = () => {
-  // Vite sẽ thay thế process.env.API_KEY bằng chuỗi thực tế khi build
-  const apiKey = process.env.API_KEY;
+// --- KEY ROTATION SYSTEM ---
+
+// Biến lưu vị trí key đang dùng hiện tại
+let currentKeyIndex = 0;
+let keyList: string[] = [];
+
+// Hàm lấy danh sách Key (Ưu tiên LocalStorage -> Env)
+const getKeys = (): string[] => {
+  // 1. Kiểm tra LocalStorage trước (User tự nhập trong Cài đặt)
+  const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
   
-  if (!apiKey || apiKey.length < 10) {
-    console.error("DEBUG API KEY:", apiKey ? `Found (Length: ${apiKey.length})` : "Undefined/Null");
-    throw new Error(
-      "❌ THIẾU API KEY!\n" +
-      "- Trên Vercel: Vào Settings > Environment Variables > Thêm Key='API_KEY', Value='AIza...' > Sau đó REDEPLOY lại.\n" +
-      "- Dưới Local: Kiểm tra file .env hoặc biến môi trường."
-    );
+  // Logic tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
+  if (localKey && localKey.length > 10) {
+      const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+      if (rawKeys.length > 0) {
+          // Nếu danh sách key thay đổi (người dùng mới nhập), reset lại
+          if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
+              console.log(`🔑 Đã nạp mới ${rawKeys.length} API Key từ Cài đặt.`);
+              keyList = rawKeys;
+              currentKeyIndex = 0;
+          }
+          return keyList;
+      }
   }
-  return new GoogleGenAI({ apiKey });
+
+  // 2. Nếu không có LocalStorage, dùng biến môi trường
+  if (keyList.length > 0) return keyList;
+
+  const envKey = process.env.API_KEY || "";
+  const keys = envKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+  
+  if (keys.length === 0) {
+    // Trả về rỗng để UI biết mà hiện Popup
+    return []; 
+  }
+
+  console.log(`✅ Đã nạp thành công ${keys.length} API Key từ ENV.`);
+  keyList = keys;
+  return keys;
+};
+
+// Hàm khởi tạo AI Client với Key hiện tại
+const getAIClient = () => {
+  const keys = getKeys();
+  
+  if (keys.length === 0) {
+      // Throw lỗi đặc biệt để App.tsx bắt được và hiện Popup
+      throw new Error("MISSING_API_KEY"); 
+  }
+
+  // Lấy key theo vòng tròn
+  const keyIndex = currentKeyIndex % keys.length;
+  const key = keys[keyIndex];
+  
+  return new GoogleGenAI({ apiKey: key });
+};
+
+// Hàm chuyển sang Key tiếp theo (khi gặp lỗi 429/400)
+const rotateKey = (): boolean => {
+  const keys = getKeys();
+  if (keys.length <= 1) {
+      return false; // Chỉ có 1 key thì không đổi được
+  }
+  
+  const prevIndex = currentKeyIndex;
+  currentKeyIndex = (currentKeyIndex + 1) % keys.length;
+  console.warn(`🔄 Auto-Rotate: Chuyển từ Key #${prevIndex + 1} sang Key #${currentKeyIndex + 1}`);
+  return true;
 };
 
 // DANH SÁCH TÊN CHUẨN (OFFICIAL DICTIONARY)
@@ -110,41 +164,23 @@ const preProcessHtml = (rawHtml: string): string => {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- URL RESOLVER HELPER ---
 const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   if (!rawUrl) return baseUrl;
-  try {
-    return new URL(rawUrl, baseUrl).href;
-  } catch (e) {
-    return rawUrl;
-  }
+  try { return new URL(rawUrl, baseUrl).href; } catch (e) { return rawUrl; }
 };
 
-// --- QUANTITY EXTRACTION HELPER (NÂNG CẤP) ---
 const extractQuantity = (rawName: string): number => {
   const clean = rawName.toLowerCase();
-  
-  // 1. Case: "Combo 2", "Bộ 3", "Set 5", "Mua 2", "SL 2", "Số lượng 2"
-  // Regex bắt: từ khóa + dấu câu tùy chọn (:.-) + khoảng trắng + số
   const prefixMatch = clean.match(/\b(combo|bộ|set|mua|sl|số lượng)\s*[:.-]*\s*(\d+)/);
   if (prefixMatch && prefixMatch[2]) return parseInt(prefixMatch[2]);
-  
-  // 2. Case: "x2", "x 3", "(x2)", "[x3]" (thường ở cuối hoặc trong ngoặc)
-  // Regex bắt: ký tự x + khoảng trắng (tùy chọn) + số
   const xMatch = clean.match(/[\s\(\[][xX]\s*(\d+)\b/);
   if (xMatch && xMatch[1]) return parseInt(xMatch[1]);
-  
-  // 3. Case đặc biệt: "Mua 1 tặng 1" -> Hiểu là 2
   if (clean.includes("mua 1 tặng 1") || clean.includes("mua 1 tang 1")) return 2;
-
-  // 4. Case đầu câu: "2 chai", "2 lọ", "3 hộp"
   const startMatch = clean.match(/^(\d+)\s*(chai|lọ|hộp|túi|miếng|cái)/);
   if (startMatch && startMatch[1]) return parseInt(startMatch[1]);
-
   return 1;
 };
 
-// --- ALGORITHMIC LOGIC ---
 const calculateMatchScore = (rawName: string, officialName: string) => {
   const rawSlug = slugify(rawName);
   const officialSlug = slugify(officialName);
@@ -158,7 +194,6 @@ const calculateMatchScore = (rawName: string, officialName: string) => {
 };
 
 const normalizeProductAlgorithm = (rawName: string) => {
-  // 1. Tìm sản phẩm trong từ điển
   const matches: { name: string, score: number }[] = [];
   OFFICIAL_NAMES.forEach(officialName => {
     const score = calculateMatchScore(rawName, officialName);
@@ -166,7 +201,6 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
   matches.sort((a, b) => b.score - a.score || b.name.length - a.name.length);
   
-  // Lọc trùng lặp
   const uniqueProducts = new Set<string>();
   matches.forEach(m => {
     let isSubset = false;
@@ -183,49 +217,35 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
 
   const finalProducts = Array.from(uniqueProducts);
-  
-  // 2. Logic xác định tên chuẩn
   let normalizedName = rawName, plCombo = "Lẻ", phanLoaiTong = "Khác", phanLoaiChiTiet = "Khác";
 
   if (finalProducts.length === 1) {
-    // TÌM THẤY 1 SẢN PHẨM KHỚP
     normalizedName = finalProducts[0];
     plCombo = "Lẻ";
-    
-    // Phân loại cơ bản
     if (normalizedName.includes("tẩy trang")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Tẩy trang"; }
     else if (normalizedName.includes("rửa mặt")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Sữa rửa mặt"; }
     else if (normalizedName.includes("mặt nạ")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Mặt nạ"; }
     else if (normalizedName.includes("tinh chất") || normalizedName.includes("serum")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Serum"; }
     
-    // --- CHECK SỐ LƯỢNG (NEW - UPDATED) ---
     const qty = extractQuantity(rawName);
     if (qty > 1) {
        const prefix = `Combo ${qty}`;
-       // ÉP BUỘC THÊM TIỀN TỐ NẾU CHƯA CÓ
-       // Logic cũ: if (!normalizedName...) -> Logic mới: Luôn luôn ghép nếu phát hiện số lượng
        normalizedName = `${prefix} ${finalProducts[0]}`;
        plCombo = prefix;
        phanLoaiTong = "Combo";
        phanLoaiChiTiet = "Bộ sản phẩm";
-    } else {
-       // Nếu không tìm thấy số nhưng có chữ Combo -> Gán là Combo chung chung
-       if (/\b(combo|bộ|set)\b/i.test(rawName)) {
+    } else if (/\b(combo|bộ|set)\b/i.test(rawName)) {
            normalizedName = `Combo ${finalProducts[0]}`;
            plCombo = "Combo";
            phanLoaiTong = "Combo";
-       }
     }
 
   } else if (finalProducts.length > 1) {
-    // TÌM THẤY NHIỀU SẢN PHẨM KHỚP -> COMBO HỖN HỢP
     normalizedName = finalProducts.sort().join(" + ");
     plCombo = `Combo ${finalProducts.length}`;
     phanLoaiTong = "Combo";
     phanLoaiChiTiet = "Bộ sản phẩm";
   } else {
-    // KHÔNG TÌM THẤY TRONG TỪ ĐIỂN
-    // Vẫn cố gắng check xem có phải Combo không dựa trên tên gốc
     const qty = extractQuantity(rawName);
     if (qty > 1) {
         plCombo = `Combo ${qty}`;
@@ -239,33 +259,50 @@ const normalizeProductAlgorithm = (rawName: string) => {
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC (GIỮ NGUYÊN) ---
+// --- AI LOGIC WITH RETRY & ROTATION ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
-  const ai = getAIClient(); // Lazy init
-  const prompt = `
-    BẠN LÀ DATA NORMALIZER.
-    INPUT: Danh sách tên thô.
-    DICTIONARY: ${OFFICIAL_NAMES.join('\n')}
-    
-    YÊU CẦU:
-    1. Xác định "Lẻ" hay "Combo".
-    2. Nếu là Combo cùng loại (ví dụ: Combo 2 chai...), hãy thêm tiền tố "Combo X" vào tên chuẩn.
-    3. Chuẩn hóa tên theo Dictionary. Nếu là Combo nhiều loại khác nhau, tách ra và nối bằng " + ".
-    
-    Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
-    
-    LIST: ${JSON.stringify(rawNames)}
-  `;
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: prompt,
-    config: { responseMimeType: "application/json" }
-  });
-  return JSON.parse(response.text || "{}");
+  
+  let retries = 3;
+  while (retries > 0) {
+    try {
+      const ai = getAIClient();
+      const prompt = `
+        BẠN LÀ DATA NORMALIZER.
+        INPUT: Danh sách tên thô.
+        DICTIONARY: ${OFFICIAL_NAMES.join('\n')}
+        
+        YÊU CẦU:
+        1. Xác định "Lẻ" hay "Combo".
+        2. Nếu là Combo cùng loại (ví dụ: Combo 2 chai...), hãy thêm tiền tố "Combo X" vào tên chuẩn.
+        3. Chuẩn hóa tên theo Dictionary. Nếu là Combo nhiều loại khác nhau, tách ra và nối bằng " + ".
+        
+        Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
+        
+        LIST: ${JSON.stringify(rawNames)}
+      `;
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      return JSON.parse(response.text || "{}");
+    } catch (error: any) {
+      const msg = String(error.message || error);
+      // Bắt lỗi quota hoặc lỗi key để đổi key
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key') || msg.includes('MISSING_API_KEY')) {
+         if (rotateKey()) {
+             await delay(1000);
+             continue; // Thử lại với key mới
+         }
+      }
+      throw error;
+    }
+  }
+  return {};
 };
 
-// --- PHASE 1: RAW EXTRACTION ONLY ---
+// --- PHASE 1: RAW EXTRACTION WITH RETRY & ROTATION ---
 export const parseRawProducts = async (
   url: string, 
   htmlHint: string, 
@@ -276,15 +313,22 @@ export const parseRawProducts = async (
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
 
   let retries = 0;
-  const maxRetries = 5;
-  let currentDelay = 5000;
+  const maxRetries = 15; // Tăng số lần thử vì có cơ chế đổi key
+  let currentDelay = 2000;
 
-  // Lazy init AI here
-  const ai = getAIClient();
-
-  while (true) {
+  while (retries < maxRetries) {
     try {
-      const prompt = `EXTRACT JSON products from HTML: [{sanPham, gia, productUrl}]. GET ALL ITEMS, NO FILTER. HTML: ${cleanHtmlInput.substring(0, 500000)}`;
+      const ai = getAIClient();
+      const prompt = `
+        EXTRACT PRODUCTS FROM HTML.
+        Target: Main product list (search results). 
+        IGNORE: Recommendations, 'Similar Products', 'Top Products', Footer items.
+        
+        Return JSON Array: [{sanPham, gia, productUrl}]
+        
+        HTML: ${cleanHtmlInput.substring(0, 500000)}
+      `;
+      
       const response = await ai.models.generateContent({
         model: model,
         contents: prompt,
@@ -308,38 +352,52 @@ export const parseRawProducts = async (
       const rawData = JSON.parse(response.text || "[]");
 
       return rawData.map((item: any) => {
-        // --- FIX LINK LOGIC ---
-        // Dùng source URL (biến url đầu vào) làm base để nối link
         const fixedUrl = resolveProductUrl(item.productUrl, url);
-        
         return {
           ...item,
-          normalizedName: item.sanPham, // Tạm thời để tên gốc
+          normalizedName: item.sanPham, 
           plCombo: "Raw",
           phanLoaiTong: "Chưa xử lý",
           phanLoaiChiTiet: "Chưa xử lý",
-          productUrl: fixedUrl, // Sử dụng link đã fix
-          url: url, // Link nguồn cha
+          productUrl: fixedUrl, 
+          url: url,
           sourceIndex,
           status: 'pending' as const
         };
       });
 
     } catch (error: any) {
-      const isRateLimit = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429;
-      if (isRateLimit && retries < maxRetries) {
-        retries++;
-        console.warn(`⚠️ Error (429). Retry ${retries}/${maxRetries}...`);
-        await delay(currentDelay);
-        currentDelay *= 1.5;
-        continue;
+      const msg = String(error.message || error);
+      const isKeyError = 
+          msg.includes('429') || 
+          msg.includes('RESOURCE_EXHAUSTED') || 
+          error.status === 429 ||
+          error.status === 400 || 
+          msg.includes('INVALID_ARGUMENT') ||
+          msg.includes('API key') ||
+          msg.includes('MISSING_API_KEY');
+      
+      if (isKeyError) {
+        if (rotateKey()) {
+             // Đổi key thành công, thử lại ngay
+             await delay(1000); 
+             continue;
+        } else {
+             // Hết key để đổi -> Ném lỗi để UI hiện Popup nhập key
+             throw new Error("MISSING_API_KEY");
+        }
+      } else {
+         console.error("Gemini Error:", error);
+         retries++;
+         await delay(currentDelay);
+         // currentDelay *= 1.5; // Exponential backoff (Optional)
       }
-      throw error;
     }
   }
+  return [];
 };
 
-// --- PHASE 2: NORMALIZATION PROCESS (Code or AI) ---
+// --- PHASE 2: NORMALIZATION PROCESS ---
 export const processNormalization = async (
   products: ProductData[],
   method: 'code' | 'ai',
@@ -349,31 +407,24 @@ export const processNormalization = async (
   let resultProducts: ProductData[] = [];
   
   if (method === 'code') {
-    // --- CODE MODE (CHUNKING) ---
     const chunkSize = 50; 
     for (let i = 0; i < products.length; i += chunkSize) {
       const chunk = products.slice(i, i + chunkSize);
-      
       const processedChunk = chunk.map(item => {
         const normInfo = normalizeProductAlgorithm(item.sanPham);
         return { ...item, ...normInfo, status: 'success' } as ProductData;
       });
-      
       resultProducts = [...resultProducts, ...processedChunk];
-      
       if (onProgress) {
         const percent = Math.round(((i + chunk.length) / products.length) * 100);
         onProgress(percent);
       }
-      
       await delay(10);
     }
     return resultProducts;
 
   } else {
-    // --- AI MODE (BATCHING) ---
     const batchSize = 30;
-    
     for (let i = 0; i < products.length; i += batchSize) {
       const batch = products.slice(i, i + batchSize);
       const rawNames = batch.map(p => p.sanPham);
@@ -391,14 +442,17 @@ export const processNormalization = async (
           } as ProductData;
         });
         resultProducts = [...resultProducts, ...processedBatch];
-        
         if (onProgress) {
             const percent = Math.round(((i + batch.length) / products.length) * 100);
             onProgress(percent);
         }
         await delay(500); 
-      } catch (e) {
+      } catch (e: any) {
         console.error("Batch error", e);
+        // Nếu lỗi Key thì sẽ được catch bên trong normalizeBatchWithAI và throw ra
+        // Nếu lỗi khác thì đánh dấu error
+        const msg = String(e.message || e);
+        if (msg.includes("MISSING_API_KEY")) throw e;
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
       }
     }

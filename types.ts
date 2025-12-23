@@ -28,13 +28,16 @@ export enum AppStatus {
   ERROR = 'ERROR'
 }
 
-// --- PROJECT SYSTEM (NEW) ---
+// --- PROJECT SYSTEM ---
 export interface Project {
   id: string;
   name: string;
   userId: string;
   createdAt: string;
   productCount: number;
+  // Cloud Sync Fields
+  sources?: SourceConfig[]; // Lưu cấu hình nguồn trực tiếp vào Project
+  lastSyncedAt?: string;
 }
 
 // --- TRACKING SYSTEM TYPES ---
@@ -58,7 +61,7 @@ export interface TrackingSourceData {
 
 export interface TrackingProduct {
   id: string; // SKU
-  projectId: string; // Link to Project
+  projectId?: string; // Link to Project
   name: string;
   category: string;
   lastUpdated: string; // ISO String

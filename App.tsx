@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, Save, Key
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -16,6 +16,7 @@ import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, create
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
+const API_KEY_STORAGE = 'USER_GEMINI_API_KEY';
 
 // --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
@@ -153,10 +154,15 @@ const ScraperWorkspace: React.FC = () => {
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'all' | 'retail' | 'combo'>('all');
   
+  // API Key State
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [userApiKey, setUserApiKey] = useState('');
+
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   // -- EFFECTS --
   useEffect(() => {
+    // 1. Load data cũ
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try { setResults(JSON.parse(saved)); } catch (e) { console.error(e); }
@@ -165,6 +171,17 @@ const ScraperWorkspace: React.FC = () => {
     if (savedSources) {
       try { setSources(JSON.parse(savedSources)); } catch (e) { console.error(e); }
     }
+
+    // 2. CHECK API KEY ON MOUNT (QUAN TRỌNG: Tự động bật Modal nếu chưa có Key)
+    const savedKey = localStorage.getItem(API_KEY_STORAGE);
+    if (savedKey) {
+        setUserApiKey(savedKey);
+    } else {
+        // Nếu không có Key trong LocalStorage, bật modal lên
+        // Delay 1s để UI render xong đẹp
+        setTimeout(() => setShowApiKeyModal(true), 800);
+    }
+
   }, []);
 
   useEffect(() => {
@@ -236,33 +253,25 @@ const ScraperWorkspace: React.FC = () => {
             const next = [...prev];
             let idx = -1;
 
-            // 1. ƯU TIÊN Ô ĐANG ĐƯỢC FOCUS (Nếu người dùng đang click vào input)
             if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < next.length) {
                 idx = focusedSourceIdxRef.current;
                 typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
             } 
-            // 2. Nếu không focus, tìm theo tên sàn
             else {
                 idx = next.findIndex(s => s.name.toUpperCase() === targetName);
-                // 3. Nếu không thấy tên sàn, tìm ô trống
                 if (idx === -1) {
                     idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
                 }
-                // 4. Fallback về ô đầu tiên
                 if (idx === -1) idx = 0;
                 typeLog(`[AUTO-FILL] Auto Detect: Nhập vào ô số ${idx + 1} (${next[idx].name})`, 'matrix');
             }
             
-            // --- LOGIC APPEND (KHÔNG XÓA DỮ LIỆU CŨ) ---
             const currentUrls = next[idx].urls || [];
-            // Chỉ thêm URL nếu chưa tồn tại
             const newUrls = currentUrls.includes(url) 
                 ? currentUrls 
                 : [...currentUrls.filter(u => u.trim() !== ''), url];
 
             const currentHtml = next[idx].htmlHint || "";
-            // Nối HTML mới vào sau HTML cũ (Dùng separator để dễ nhìn hoặc xử lý sau này)
-            // Lưu ý: Gemini có thể xử lý context lớn, việc nối chuỗi này giúp gom nhiều page.
             const newHtml = currentHtml 
                 ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
                 : html;
@@ -284,6 +293,40 @@ const ScraperWorkspace: React.FC = () => {
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, []);
 
+  const handleSaveApiKey = () => {
+    // Logic mới: Không validate length < 10 nữa vì có thể user đang xóa key
+    // Chỉ cần trim và làm sạch
+    const cleaned = userApiKey.trim();
+    if (cleaned.length === 0) {
+        if(confirm("Bạn muốn xóa toàn bộ Key và dùng mặc định?")) {
+            localStorage.removeItem(API_KEY_STORAGE);
+            setUserApiKey('');
+            setShowApiKeyModal(false);
+            alert("Đã xóa Key người dùng. Sẽ dùng Key hệ thống (nếu có).");
+        }
+        return;
+    }
+
+    // Tách key để kiểm tra (dấu phẩy hoặc xuống dòng)
+    const keys = cleaned.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+    if (keys.length === 0) {
+        alert("Không tìm thấy Key hợp lệ nào (Key phải dài hơn 10 ký tự).");
+        return;
+    }
+
+    // Lưu chuỗi chuẩn hóa (nối bằng dấu phẩy)
+    const savedString = keys.join(',');
+    localStorage.setItem(API_KEY_STORAGE, savedString);
+    setShowApiKeyModal(false);
+    alert(`Đã lưu ${keys.length} API Key! Hệ thống sẽ tự động xoay vòng key.`);
+  };
+
+  // Đếm số key đang nhập
+  const detectedKeysCount = useMemo(() => {
+      if (!userApiKey) return 0;
+      return userApiKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10).length;
+  }, [userApiKey]);
+
   // -- PROJECT HANDLERS --
   const handleCreateProject = async () => {
       const name = prompt("Nhập tên dự án mới:");
@@ -304,7 +347,6 @@ const ScraperWorkspace: React.FC = () => {
       if (newName && newName !== proj.name) {
           try {
               await updateProject(proj.id, newName);
-              // Update local state
               setProjects(prev => prev.map(p => p.id === proj.id ? {...p, name: newName} : p));
               if (currentProject?.id === proj.id) {
                   setCurrentProject({...currentProject, name: newName});
@@ -319,10 +361,8 @@ const ScraperWorkspace: React.FC = () => {
       if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"?`)) {
           try {
               await deleteProject(proj.id);
-              // Update local state
               const remaining = projects.filter(p => p.id !== proj.id);
               setProjects(remaining);
-              // If deleted active project, select another one or null
               if (currentProject?.id === proj.id) {
                   const next = remaining.length > 0 ? remaining[0] : null;
                   setCurrentProject(next);
@@ -341,11 +381,9 @@ const ScraperWorkspace: React.FC = () => {
         return;
     }
     
-    // Non-blocking save initiation
     setSavingProgress({ current: 0, total: results.length });
     typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
 
-    // Async execution
     saveScrapedDataToFirestore(
         currentUser.uid, 
         currentProject.id, 
@@ -357,7 +395,7 @@ const ScraperWorkspace: React.FC = () => {
     ).then(() => {
         typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
         setSavingProgress(null);
-        refreshProjects(); // Update project stats
+        refreshProjects(); 
     }).catch((error: any) => {
         typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
         setSavingProgress(null);
@@ -394,10 +432,6 @@ const ScraperWorkspace: React.FC = () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
       if (validUrls.length > 0) {
-        // --- LOGIC MỚI: Xử lý nhiều URL cho 1 Source ---
-        // Vì HTML hint hiện tại đang bị gộp chung (concatenated), ta cần cách xử lý thông minh hơn.
-        // Hiện tại: Gửi toàn bộ cục HTML Hints khổng lồ cho mỗi URL. 
-        // Gemini sẽ tự lọc sản phẩm trong HTML khớp với context.
         return validUrls.map(url => ({ src, srcIdx, url, html: src.htmlHint }));
       }
       if (src.htmlHint.trim().length > 50) {
@@ -431,8 +465,16 @@ const ScraperWorkspace: React.FC = () => {
         } else {
             typeLog(`[WARN] Không tìm thấy dữ liệu.`, 'warning');
         }
-      } catch (err) {
-        typeLog(`[ERR] Lỗi xử lý ${task.src.name}: ${String(err)}`, 'error');
+      } catch (err: any) {
+        const msg = String(err.message || err);
+        // Bắt lỗi MISSING_API_KEY để bật modal
+        if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid") || msg.includes("400")) {
+             typeLog(`[CRITICAL] Lỗi Key: ${msg}`, 'error');
+             setShowApiKeyModal(true); 
+             setStatus(AppStatus.ERROR);
+             return; 
+        }
+        typeLog(`[ERR] Lỗi xử lý ${task.src.name}: ${msg}`, 'error');
       }
       completed++;
       setProgress(Math.round((completed / activeTasks.length) * 100));
@@ -451,8 +493,14 @@ const ScraperWorkspace: React.FC = () => {
       setResults(optimizedResults);
       typeLog(`[OK] Đã tối ưu hóa ${optimizedResults.length} sản phẩm.`, 'success');
       setShowSuccessModal(true);
-    } catch (e) {
-      typeLog(`[ERR] Lỗi tối ưu hóa: ${String(e)}`, 'error');
+    } catch (e: any) {
+      const msg = String(e.message || e);
+       if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid")) {
+             typeLog(`[CRITICAL] Lỗi Key khi tối ưu: ${msg}`, 'error');
+             setShowApiKeyModal(true); 
+      } else {
+        typeLog(`[ERR] Lỗi tối ưu hóa: ${msg}`, 'error');
+      }
     }
     setNormalizationStatus(AppStatus.COMPLETED);
   };
@@ -574,7 +622,67 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* SAVING PROGRESS TOAST (Fixed Bottom Right) */}
+      {/* API KEY MODAL (CÀI ĐẶT) - Z-INDEX 10000 ĐỂ HIỆN TRÊN CÙNG */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 bg-slate-900/90 z-[10000] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
+           <div className="bg-[#1e293b] rounded-[2rem] p-8 max-w-lg w-full shadow-2xl border border-slate-700 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-rose-500"></div>
+              
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-4">
+                    <div className="bg-indigo-600/20 p-3 rounded-2xl">
+                        <Key className="w-8 h-8 text-indigo-400" />
+                    </div>
+                    <div>
+                        <h3 className="text-xl font-black text-white uppercase tracking-tight">Cài đặt API Key</h3>
+                        <p className="text-xs text-slate-400 font-bold">Quản lý kết nối Gemini AI</p>
+                    </div>
+                </div>
+                <button onClick={() => setShowApiKeyModal(false)} className="text-slate-500 hover:text-white transition-colors"><X className="w-5 h-5"/></button>
+              </div>
+
+              <div className="space-y-4 mb-8">
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-xl flex items-start gap-3">
+                      <Zap className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                      <div>
+                          <p className="text-xs font-bold text-indigo-200">Rotation System (Hệ thống xoay vòng)</p>
+                          <p className="text-[10px] text-indigo-400 mt-1">
+                              Bạn có thể nhập <strong>nhiều API Key</strong> ngăn cách bởi dấu phẩy (,) hoặc xuống dòng. 
+                              Hệ thống sẽ tự động đổi key khi hết hạn mức (429) hoặc lỗi (400).
+                          </p>
+                      </div>
+                  </div>
+
+                  <div>
+                      <div className="flex justify-between items-center mb-2">
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">Danh sách Google Gemini Key</label>
+                         {detectedKeysCount > 0 && <span className="text-[9px] font-bold text-emerald-400 bg-emerald-900/30 px-2 py-0.5 rounded-full">Đã phát hiện {detectedKeysCount} key</span>}
+                      </div>
+                      
+                      <textarea 
+                          value={userApiKey}
+                          onChange={(e) => setUserApiKey(e.target.value)}
+                          placeholder="AIzaSy..., AIzaSy..., AIzaSy..."
+                          className="w-full h-32 bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono resize-none leading-relaxed"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-2 flex justify-between">
+                          <span>Chưa có Key? <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">Lấy miễn phí tại đây</a></span>
+                          <span className="text-slate-600">Mỗi key cách nhau dấu phẩy</span>
+                      </p>
+                  </div>
+              </div>
+
+              <div className="flex gap-3">
+                  <button onClick={() => setShowApiKeyModal(false)} className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase hover:bg-slate-700 transition-colors">Đóng</button>
+                  <button onClick={handleSaveApiKey} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20">
+                      <Save className="w-4 h-4" /> Lưu Cấu Hình
+                  </button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* SAVING PROGRESS TOAST */}
       {savingProgress && (
           <div className="fixed bottom-6 right-6 z-[1000] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300">
               <div className="flex items-start justify-between mb-3">
@@ -738,7 +846,7 @@ const ScraperWorkspace: React.FC = () => {
               <Cpu className="w-8 h-8 text-white animate-pulse" />
             </div>
             <div>
-              <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
+              <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.5</span></h1>
               <div className="flex items-center gap-2 mt-2">
                   <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
                       <FolderOpen className="w-3 h-3" />
@@ -765,6 +873,16 @@ const ScraperWorkspace: React.FC = () => {
                   </div>
                </div>
              )}
+
+             {/* API KEY BUTTON - NÚT NHẬP KEY RÕ RÀNG HƠN */}
+             <button 
+                onClick={() => setShowApiKeyModal(true)}
+                className="flex items-center gap-2 px-6 py-4 bg-slate-900 text-yellow-400 hover:bg-slate-800 rounded-2xl transition-all border-2 border-slate-800 hover:border-yellow-400 shadow-xl" 
+                title="Cài đặt API Key"
+             >
+                <Key className="w-5 h-5" />
+                <span className="text-[11px] font-black uppercase tracking-widest">NHẬP KEY</span>
+             </button>
 
              <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu tạm?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Temp</button>
              

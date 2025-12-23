@@ -5,6 +5,20 @@ import { ProductData, TrackingProduct, SourceConfig, Project } from '../types';
 // Tên collection trong Firestore
 const COLLECTION_PRODUCTS = 'tracked_products';
 const COLLECTION_PROJECTS = 'projects';
+const COLLECTION_WORKSPACE_DATA = 'project_workspaces'; // Nơi lưu trữ dữ liệu tạm (Results) của project
+
+// --- HELPER: NÉN HTML TRƯỚC KHI LƯU ---
+const compressHtmlForStorage = (html: string): string => {
+    if (!html || html.length < 100) return html;
+    let clean = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gim, "")
+                    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gim, "")
+                    .replace(/<!--[\s\S]*?-->/g, "");
+    if (clean.length > 200000) {
+        console.warn("HTML quá dài, cắt bớt để lưu trữ an toàn.");
+        return clean.substring(0, 200000) + "...(Truncated)";
+    }
+    return clean;
+};
 
 /**
  * Lấy danh sách dự án của User (Sắp xếp mới nhất trước)
@@ -12,19 +26,16 @@ const COLLECTION_PROJECTS = 'projects';
 export const getUserProjects = async (userId: string): Promise<Project[]> => {
   if (!userId) return [];
   try {
-    // SỬA LỖI: Bỏ .orderBy("createdAt", "desc") ở đây để tránh lỗi "Missing Index" của Firebase
-    // Chỉ query theo userId
     const snapshot = await db.collection(COLLECTION_PROJECTS)
       .where("userId", "==", userId)
       .get();
     
     const projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
 
-    // Thực hiện sắp xếp ở phía Client (Javascript)
     return projects.sort((a, b) => {
         const timeA = new Date(a.createdAt).getTime();
         const timeB = new Date(b.createdAt).getTime();
-        return timeB - timeA; // Mới nhất lên đầu
+        return timeB - timeA; 
     });
 
   } catch (error) {
@@ -43,7 +54,8 @@ export const createProject = async (userId: string, projectName: string): Promis
     name: projectName,
     userId,
     createdAt: new Date().toISOString(),
-    productCount: 0
+    productCount: 0,
+    sources: []
   };
   await newProjectRef.set(projectData);
   return projectData;
@@ -65,27 +77,85 @@ export const updateProject = async (projectId: string, newName: string) => {
 export const deleteProject = async (projectId: string) => {
     if (!projectId) return;
     await db.collection(COLLECTION_PROJECTS).doc(projectId).delete();
-    
-    // (Optional) Có thể xóa thêm các sản phẩm thuộc dự án này nếu muốn dọn sạch DB
-    // const batch = db.batch();
-    // const products = await db.collection(COLLECTION_PRODUCTS).where('projectId', '==', projectId).get();
-    // products.forEach(doc => batch.delete(doc.ref));
-    // await batch.commit();
+    await db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId).delete();
 };
 
 /**
- * Hàm lưu dữ liệu lên Firebase có hỗ trợ Project và Progress Callback
+ * [NEW] ĐỒNG BỘ TRẠNG THÁI LÀM VIỆC (REAL-TIME SYNC)
+ */
+export const syncProjectWorkspace = async (
+    projectId: string, 
+    sources: SourceConfig[], 
+    results: ProductData[]
+) => {
+    if (!projectId) return;
+
+    const optimizedSources = sources.map(src => ({
+        ...src,
+        htmlHint: compressHtmlForStorage(src.htmlHint)
+    }));
+
+    await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
+        sources: optimizedSources,
+        productCount: results.length,
+        lastSyncedAt: new Date().toISOString()
+    });
+
+    const workspaceRef = db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId);
+    
+    if (results.length > 0) {
+        try {
+            await workspaceRef.set({
+                results: results,
+                updatedAt: new Date().toISOString()
+            });
+        } catch (e: any) {
+            if (e.code === 'invalid-argument' && e.message.includes('exceeds the maximum size')) {
+                console.warn("Results quá lớn, lưu bản rút gọn...");
+                await workspaceRef.set({
+                    results: results.slice(0, 500),
+                    updatedAt: new Date().toISOString(),
+                    note: "Data truncated due to size limit"
+                });
+            } else {
+                throw e;
+            }
+        }
+    } else {
+        await workspaceRef.set({ results: [], updatedAt: new Date().toISOString() });
+    }
+};
+
+/**
+ * [NEW] LẤY TRẠNG THÁI LÀM VIỆC CŨ
+ */
+export const getProjectWorkspace = async (projectId: string) => {
+    if (!projectId) return { sources: null, results: [] };
+
+    const projDoc = await db.collection(COLLECTION_PROJECTS).doc(projectId).get();
+    const projData = projDoc.data() as Project;
+    
+    const wsDoc = await db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId).get();
+    const wsData = wsDoc.exists ? wsDoc.data() : { results: [] };
+
+    return {
+        sources: projData?.sources || null,
+        results: (wsData?.results || []) as ProductData[]
+    };
+};
+
+/**
+ * Hàm lưu dữ liệu lên Firebase (Dành cho Tracking - Logic cũ, giữ nguyên để TrackingDashboard hoạt động)
  */
 export const saveScrapedDataToFirestore = async (
   userId: string,
-  projectId: string, // Bắt buộc phải có Project ID
+  projectId: string, 
   scrapedProducts: ProductData[],
   sourceConfigs: SourceConfig[],
-  onProgress?: (current: number, total: number) => void // Callback cập nhật tiến độ
+  onProgress?: (current: number, total: number) => void 
 ) => {
   if (!userId || !projectId || scrapedProducts.length === 0) return;
 
-  // 1. Nhóm dữ liệu cào theo Tên Chuẩn
   const grouped: Record<string, ProductData[]> = {};
   scrapedProducts.forEach(p => {
     const key = p.normalizedName || p.sanPham;
@@ -100,15 +170,12 @@ export const saveScrapedDataToFirestore = async (
   const total = entries.length;
   let processed = 0;
 
-  // 2. Duyệt qua từng nhóm sản phẩm
   for (const [name, items] of entries) {
-    // Tạo ID dựa trên ProjectID + Tên sản phẩm -> Đảm bảo mỗi dự án độc lập hoàn toàn
     const safeName = btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 30);
     const productId = `PROD_${projectId}_${safeName}`;
     
     const productRef = db.collection(COLLECTION_PRODUCTS).doc(productId);
     
-    // Lấy dữ liệu cũ
     const docSnap = await productRef.get();
     let existingData: any = docSnap.exists ? docSnap.data() : null;
 
@@ -118,17 +185,14 @@ export const saveScrapedDataToFirestore = async (
         const config = sourceConfigs[item.sourceIndex - 1];
         if (!config) return;
 
-        // LOGIC TÊN NGUỒN MỚI: Giữ nguyên tên người dùng nhập
         let sourceKey = config.name.trim(); 
         const lowerName = sourceKey.toLowerCase();
 
-        // Chuẩn hóa một số sàn lớn để hiển thị đẹp hơn, còn lại giữ nguyên
         if (lowerName.includes('shopee')) sourceKey = 'Shopee';
         else if (lowerName.includes('lazada')) sourceKey = 'Lazada';
         else if (lowerName.includes('tiki')) sourceKey = 'Tiki';
         else if (lowerName.includes('tiktok')) sourceKey = 'TikTok';
         
-        // Nếu tên rỗng thì mới dùng source_index
         if (!sourceKey) sourceKey = `Source ${item.sourceIndex}`;
 
         let finalPrice = item.gia;
@@ -162,7 +226,7 @@ export const saveScrapedDataToFirestore = async (
 
     const productPayload = {
         userId,
-        projectId, // Quan trọng: Gắn sản phẩm vào Project
+        projectId, 
         id: productId,
         name: name,
         category: items[0].phanLoaiChiTiet || "Chưa phân loại",
@@ -176,12 +240,6 @@ export const saveScrapedDataToFirestore = async (
     processed++;
     if (onProgress) onProgress(processed, total);
   }
-
-  // Cập nhật số lượng sản phẩm cho Project (Ước lượng)
-  await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
-      productCount: total,
-      lastUpdated: nowISO
-  });
 };
 
 /**
