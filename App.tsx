@@ -416,30 +416,37 @@ const ScraperWorkspace: React.FC = () => {
       }
   };
 
-  // --- MODIFIED: SYNC ALL WORKSPACE DATA ---
+  // --- MODIFIED: SYNC ALL WORKSPACE DATA (ALLOW SAVING WITHOUT RESULTS) ---
   const handleSyncToCloud = async () => {
-    if (!currentUser || results.length === 0) return;
+    // Chỉ cần có User là được, không bắt buộc phải có results
+    if (!currentUser) return;
     if (!currentProject) {
         alert("Vui lòng chọn hoặc tạo DỰ ÁN trước khi lưu!");
         return;
     }
     
-    setSavingProgress({ current: 0, total: results.length });
+    // Nếu chưa có kết quả thì progress = 100% luôn cho nhanh
+    const totalToSave = results.length > 0 ? results.length : 1;
+    setSavingProgress({ current: 0, total: totalToSave });
     
     try {
-        // 1. Lưu sản phẩm vào Tracking (Giữ nguyên logic cũ)
-        typeLog(`[CLOUD] Đang lưu ${results.length} sản phẩm vào Theo dõi giá...`, 'system');
-        await saveScrapedDataToFirestore(
-            currentUser.uid, 
-            currentProject.id, 
-            results, 
-            sources,
-            (current, total) => {
-                 setSavingProgress({ current, total });
-            }
-        );
+        // 1. Lưu sản phẩm vào Tracking (Chỉ chạy nếu có sản phẩm)
+        if (results.length > 0) {
+            typeLog(`[CLOUD] Đang lưu ${results.length} sản phẩm vào Theo dõi giá...`, 'system');
+            await saveScrapedDataToFirestore(
+                currentUser.uid, 
+                currentProject.id, 
+                results, 
+                sources,
+                (current, total) => {
+                     setSavingProgress({ current, total });
+                }
+            );
+        } else {
+            typeLog(`[CLOUD] Chỉ lưu cấu hình nguồn (chưa có sản phẩm)...`, 'info');
+        }
 
-        // 2. [MỚI] Lưu trạng thái Workspace (HTML + URLs)
+        // 2. [QUAN TRỌNG] Luôn luôn lưu trạng thái Workspace (HTML + URLs)
         typeLog(`[CLOUD] Đang đồng bộ trạng thái làm việc (HTML & Config)...`, 'system');
         await syncProjectWorkspace(currentProject.id, sources, results);
 
@@ -1056,11 +1063,12 @@ const ScraperWorkspace: React.FC = () => {
             <div className="flex items-center gap-3">
                <button 
                   onClick={handleSyncToCloud}
-                  disabled={results.length === 0 || savingProgress !== null}
+                  // Cho phép lưu nếu đã chọn dự án, không cần có kết quả
+                  disabled={!currentProject || savingProgress !== null}
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
                    <UploadCloud className="w-4 h-4"/>
-                   {savingProgress ? 'Đang lưu...' : 'Lưu vào Firebase'}
+                   {savingProgress ? 'Đang lưu...' : (results.length > 0 ? 'Lưu Kết Quả' : 'Lưu Cấu Hình')}
                </button>
 
                <div className="h-8 w-px bg-slate-200 mx-2"></div>
