@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { TrackingProduct, TrackingSourceData } from '../types';
 import { 
-  TrendingUp, TrendingDown, Clock,
-  Search, RefreshCw, ArrowLeft, Play, Activity, Zap, AlertCircle, Minus
+  TrendingUp, TrendingDown, Clock, ExternalLink, 
+  Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle, Loader2, Minus
 } from 'lucide-react';
 import { refreshAllPrices } from '../services/trackingService';
 
@@ -49,6 +48,10 @@ const PriceCell = ({ data }: { data: any }) => {
     const diff = currentPrice - prevPrice;
     const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
     
+    // Logic màu mới cho Dark Mode:
+    // Tăng -> Xanh (Emerald 400)
+    // Giảm -> Đỏ (Rose 400)
+    // Không đổi -> Vàng (Yellow 400)
     let colorClass = '';
     let arrowIcon = null;
     let containerClass = '';
@@ -123,7 +126,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
           clearInterval(scanIntervalRef.current);
       }
       return () => clearInterval(scanIntervalRef.current);
-  }, [isAutoScanMode, isScanning]);
+  }, [isAutoScanMode, isScanning]); // Thêm dependencies
 
   // --- CORE SCAN FUNCTION ---
   const handleRealScan = async () => {
@@ -163,11 +166,12 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
       const priority = ['shopee', 'lazada', 'tiki', 'tiktok', 'web'];
       
       return Array.from(sources).sort((a, b) => {
+          // So sánh không phân biệt hoa thường để tìm trong priority
           const idxA = priority.indexOf(a.toLowerCase()) !== -1 ? priority.indexOf(a.toLowerCase()) : 99;
           const idxB = priority.indexOf(b.toLowerCase()) !== -1 ? priority.indexOf(b.toLowerCase()) : 99;
           
-          if (idxA !== idxB) return idxA - idxB;
-          return a.localeCompare(b);
+          if (idxA !== idxB) return idxA - idxB; // Sắp xếp theo ưu tiên sàn TMĐT
+          return a.localeCompare(b); // Nếu cùng độ ưu tiên (vd cùng là web khác), sắp xếp alpha
       }).slice(0, 5);
   }, [localData]);
 
@@ -279,14 +283,11 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                 </thead>
                 <tbody className="divide-y divide-slate-700/50 text-sm">
                     {filteredData.map((product) => {
-                        const totalChanges = Object.values(product.sources).reduce((acc: number, src: any) => {
-                            const history = src.history || [];
-                            const uniquePrices = new Set(history.map((h: any) => h.avgPrice || h.price));
+                        const totalChanges = Object.values(product.sources).reduce((acc: number, src: unknown) => {
+                            const s = src as TrackingSourceData;
+                            const uniquePrices = new Set((s.history || []).map((h: any) => h.avgPrice || h.price));
                             return acc + (uniquePrices.size - 1 > 0 ? uniquePrices.size - 1 : 0);
                         }, 0);
-                        
-                        // Explicitly get the first source data for Sparkline and type cast it
-                        const firstSourceData = Object.values(product.sources)[0] as TrackingSourceData | undefined;
 
                         return (
                             <tr key={product.id} className="hover:bg-slate-700/30 transition-colors group">
@@ -300,6 +301,8 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                                 </td>
 
                                 {sourceColumns.map((colKey, i) => {
+                                    // Tìm key chính xác trong product.sources (phân biệt hoa thường)
+                                    // Vì colKey có thể là "Lazada" nhưng trong DB cũ là "lazada", hoặc ngược lại
                                     const actualKey = Object.keys(product.sources).find(k => k.toLowerCase() === colKey.toLowerCase()) || colKey;
                                     const sourceData = product.sources[actualKey];
                                     return (
@@ -312,7 +315,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                                 <td className="p-4 text-center border-l border-slate-700/50">
                                     <div className="flex justify-center">
                                         <MiniSparkline 
-                                            history={firstSourceData?.history || []} 
+                                            history={Object.values(product.sources)[0]?.history || []} 
                                             color="#6366f1" 
                                         />
                                     </div>

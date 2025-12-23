@@ -35,6 +35,9 @@ export interface Project {
   userId: string;
   createdAt: string;
   productCount: number;
+  // Cloud Sync Fields
+  sources?: SourceConfig[]; // Lưu cấu hình nguồn trực tiếp vào Project
+  lastSyncedAt?: string;
 }
 
 // --- TRACKING SYSTEM TYPES ---

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, CloudLightning
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -12,9 +12,9 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
+import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject, syncProjectWorkspace, getProjectWorkspace } from './services/firebaseService';
 
-const STORAGE_KEY = 'super_scraper_v22_standard_names';
+// Bỏ Storage Key Local cũ để dùng Cloud hoàn toàn
 const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
 
 // --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
@@ -43,9 +43,9 @@ const SourceInputCard = memo(({
   }, [source.htmlHint, source.urls]);
 
   return (
-    <div className={`bg-white p-6 rounded-[2.5rem] border shadow-sm transition-all group ${source.htmlHint ? 'border-emerald-400 shadow-emerald-100 ring-4 ring-emerald-50' : 'border-slate-200 hover:border-indigo-200'}`}>
+    <div className={`bg-white p-6 rounded-[2.5rem] border shadow-sm transition-all group ${source.urls.length > 1 || (source.urls[0] && source.urls[0] !== '') ? 'border-emerald-400 shadow-emerald-100 ring-4 ring-emerald-50' : 'border-slate-200 hover:border-indigo-200'}`}>
       <div className="flex items-center gap-4 mb-5 border-b border-slate-50 pb-4">
-        <div className={`w-10 h-10 flex items-center justify-center rounded-2xl font-black text-xs transition-all ${source.htmlHint ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white'}`}>
+        <div className={`w-10 h-10 flex items-center justify-center rounded-2xl font-black text-xs transition-all ${source.urls.length > 1 || (source.urls[0] && source.urls[0] !== '') ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white'}`}>
           {index + 1}
         </div>
         <div className="flex-1">
@@ -75,7 +75,7 @@ const SourceInputCard = memo(({
           </div>
         )}
 
-        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập {source.urls.filter(u=>u).length} link</span>}
+        {(source.urls.length > 0 && source.urls[0] !== '') && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã có {source.urls.filter(u=>u).length} link</span>}
       </div>
       <div className="space-y-4">
         <textarea 
@@ -92,15 +92,15 @@ const SourceInputCard = memo(({
               defaultValue={source.htmlHint}
               onFocus={() => onFocusInput(index)}
               onBlur={(e) => onUpdate(index, 'htmlHint', e.target.value)}
-              placeholder="Paste HTML Code (Body) vào đây..."
-              className="w-full p-5 h-40 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600"
+              placeholder="Paste HTML (Thủ công) - Hệ thống sẽ tự động lưu lên Cloud..."
+              className="w-full p-5 h-20 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600 truncate"
             />
             <div className="absolute right-4 top-4 text-slate-300 group-hover:text-indigo-300 pointer-events-none">
                 <Code className="w-4 h-4" />
             </div>
             <div className="absolute bottom-4 right-4 pointer-events-none">
               <span className="text-[9px] font-bold text-slate-300 bg-white/80 px-2 py-1 rounded-lg backdrop-blur-sm">
-                 HTML INPUT
+                 HTML MANUAL (Auto-Sync)
               </span>
             </div>
         </div>
@@ -146,6 +146,10 @@ const ScraperWorkspace: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [savingProgress, setSavingProgress] = useState<{current: number, total: number} | null>(null);
+  
+  // Cloud Sync Status
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const syncTimeoutRef = useRef<any>(null);
 
   // Tracking & Filter State
   const [showTracking, setShowTracking] = useState(false);
@@ -158,45 +162,85 @@ const ScraperWorkspace: React.FC = () => {
   
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // -- EFFECTS --
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try { setResults(JSON.parse(saved)); } catch (e) { console.error(e); }
-    }
-    const savedSources = localStorage.getItem(STORAGE_KEY + '_sources');
-    if (savedSources) {
-      try { setSources(JSON.parse(savedSources)); } catch (e) { console.error(e); }
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(results));
-  }, [results]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_sources', JSON.stringify(sources));
-  }, [sources]);
-
-  useEffect(() => {
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-    }
-  }, [logs]);
-
-  // Load Projects on Mount AND Restore Selected Project
+  // -- INIT LOAD --
   useEffect(() => {
       if (currentUser) {
           refreshProjects();
       }
   }, [currentUser]);
 
-  // AUTO-SAVE: Khi người dùng chọn dự án, lưu ID vào localStorage
+  // -- CLOUD LOAD: Khi chọn dự án, tải dữ liệu workspace từ Cloud --
   useEffect(() => {
-    if (currentProject) {
-        localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+    const loadWorkspace = async () => {
+        if (!currentProject) return;
+        
+        setIsCloudSyncing(true); // Fake sync UI while loading
+        try {
+            const { sources: cloudSources, results: cloudResults } = await getProjectWorkspace(currentProject.id);
+            
+            // Nếu có dữ liệu trên cloud thì dùng, không thì giữ mặc định
+            if (cloudSources && cloudSources.length > 0) {
+                setSources(cloudSources);
+            } else {
+                // Reset về mặc định nếu project mới tinh
+                setSources(Array(10).fill(null).map((_, i) => {
+                    const names = [
+                        "SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA",
+                        "TIKI", "TIKTOK", "BEAUTY BOX", "WATSONS", "GUARDIAN"
+                    ];
+                    return { name: names[i] || `NGUỒN ${i + 1}`, urls: [''], htmlHint: '' };
+                }));
+            }
+
+            if (cloudResults && cloudResults.length > 0) {
+                setResults(cloudResults);
+                typeLog(`[CLOUD] Đã khôi phục ${cloudResults.length} kết quả từ lần làm việc trước.`, 'success');
+            } else {
+                setResults([]);
+            }
+            
+            // Lưu lại ID dự án active
+            localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+
+        } catch (e) {
+            console.error("Load cloud data failed:", e);
+            typeLog("[CLOUD ERR] Không thể tải dữ liệu dự án.", 'error');
+        } finally {
+            setIsCloudSyncing(false);
+        }
+    };
+
+    loadWorkspace();
+  }, [currentProject?.id]); // Chỉ chạy khi ID dự án thay đổi
+
+  // -- CLOUD AUTO-SAVE: Khi sources hoặc results thay đổi --
+  useEffect(() => {
+      if (!currentProject) return;
+
+      // Debounce logic: Chờ 2s sau khi ngừng gõ/ngừng đổi mới lưu
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+      setIsCloudSyncing(true); // Hiển thị "Đang lưu..." ngay lập tức để user yên tâm
+      
+      syncTimeoutRef.current = setTimeout(async () => {
+          try {
+              await syncProjectWorkspace(currentProject.id, sources, results);
+              // Chỉ tắt trạng thái syncing sau khi lưu xong
+              setIsCloudSyncing(false);
+          } catch (e) {
+              console.error("Auto-sync failed:", e);
+              setIsCloudSyncing(false); 
+          }
+      }, 3000); // 3 giây debounce
+
+      return () => clearTimeout(syncTimeoutRef.current);
+  }, [sources, results, currentProject?.id]);
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [currentProject]);
+  }, [logs]);
 
   const refreshProjects = async () => {
       if (!currentUser) return;
@@ -219,9 +263,9 @@ const ScraperWorkspace: React.FC = () => {
       }
   };
 
-  // -- EXTENSION LISTENER --
+  // -- EXTENSION LISTENER (OPTIMIZED FOR MEMORY) --
   useEffect(() => {
-    const handleExtensionMessage = (event: MessageEvent) => {
+    const handleExtensionMessage = async (event: MessageEvent) => {
       if (event.data?.type === 'SUPER_SCRAPER_EXTENSION_DATA') {
          const { html, url, title } = event.data.payload;
          typeLog(`[EXTENSION] Đã nhận dữ liệu từ: ${url}`, 'success');
@@ -235,57 +279,69 @@ const ScraperWorkspace: React.FC = () => {
          else if (lowerUrl.includes("sociolla")) targetName = "SOCIOLA";
          else if (lowerUrl.includes("thegioiskinfood")) targetName = "THEGIOISKINFOOD";
 
-         setSources(prev => {
-            const next = [...prev];
-            let idx = -1;
+         // 1. Tìm vị trí nguồn phù hợp
+         let idx = -1;
+         // Ưu tiên ô đang focus
+         if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < sources.length) {
+             idx = focusedSourceIdxRef.current;
+         } else {
+             idx = sources.findIndex(s => s.name.toUpperCase() === targetName);
+             if (idx === -1) idx = sources.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+             if (idx === -1) idx = 0;
+         }
 
-            // 1. ƯU TIÊN Ô ĐANG ĐƯỢC FOCUS (Nếu người dùng đang click vào input)
-            if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < next.length) {
-                idx = focusedSourceIdxRef.current;
-                typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
-            } 
-            // 2. Nếu không focus, tìm theo tên sàn
-            else {
-                idx = next.findIndex(s => s.name.toUpperCase() === targetName);
-                // 3. Nếu không thấy tên sàn, tìm ô trống
-                if (idx === -1) {
-                    idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
-                }
-                // 4. Fallback về ô đầu tiên
-                if (idx === -1) idx = 0;
-                typeLog(`[AUTO-FILL] Auto Detect: Nhập vào ô số ${idx + 1} (${next[idx].name})`, 'matrix');
-            }
-            
-            // --- LOGIC APPEND (KHÔNG XÓA DỮ LIỆU CŨ) ---
-            const currentUrls = next[idx].urls || [];
-            // Chỉ thêm URL nếu chưa tồn tại
-            const newUrls = currentUrls.includes(url) 
-                ? currentUrls 
-                : [...currentUrls.filter(u => u.trim() !== ''), url];
+         typeLog(`[PROCESSING] Đang xử lý trực tiếp dữ liệu từ Extension vào Nguồn ${idx + 1}...`, 'matrix');
 
-            const currentHtml = next[idx].htmlHint || "";
-            // Nối HTML mới vào sau HTML cũ (Dùng separator để dễ nhìn hoặc xử lý sau này)
-            // Lưu ý: Gemini có thể xử lý context lớn, việc nối chuỗi này giúp gom nhiều page.
-            const newHtml = currentHtml 
-                ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
-                : html;
+         // 2. XỬ LÝ NGAY LẬP TỨC
+         try {
+             const rawItems = await parseRawProducts(url, html, idx + 1);
+             
+             if (rawItems.length > 0) {
+                 const formatted = rawItems.map(p => ({
+                    ...p,
+                    id: Math.random().toString(36).substr(2, 9),
+                    timestamp: Date.now()
+                  } as ProductData));
+                 
+                 // Thêm ngay vào kết quả -> Sẽ kích hoạt Auto-Sync
+                 setResults(prev => [...formatted, ...prev]);
+                 typeLog(`[SUCCESS] Đã thêm ${rawItems.length} sản phẩm từ Extension.`, 'success');
 
-            next[idx] = {
-                ...next[idx],
-                name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName && idx !== focusedSourceIdxRef.current 
-                    ? targetName 
-                    : next[idx].name, 
-                htmlHint: newHtml, 
-                urls: newUrls 
-            };
-            return next;
-         });
+                 // Update URL vào Source Config
+                 // Lưu ý: Ta KHÔNG lưu HTML vào state ở đây để tránh lag UI ngay lập tức.
+                 // Nhưng nếu user muốn "Lưu 1:1", ta có thể lưu.
+                 // Tuy nhiên Extension gửi HTML rất nặng, ta nên để cơ chế Auto-Sync xử lý (lưu url).
+                 // Nếu cần HTML để re-crawl sau này, ta nên cân nhắc kỹ. Ở đây ta chỉ lưu URL.
+                 setSources(prev => {
+                    const next = [...prev];
+                    const currentUrls = next[idx].urls || [];
+                    const newUrls = currentUrls.includes(url) 
+                        ? currentUrls 
+                        : [...currentUrls.filter(u => u.trim() !== ''), url];
+                    
+                    next[idx] = {
+                        ...next[idx],
+                        name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName 
+                            ? targetName 
+                            : next[idx].name,
+                        urls: newUrls,
+                        // KHÔNG set htmlHint từ Extension vì nó quá nặng (2MB+) gây crash React
+                        // htmlHint: html 
+                    };
+                    return next;
+                 });
+             } else {
+                 typeLog(`[WARN] Extension gửi dữ liệu nhưng không tìm thấy sản phẩm nào.`, 'warning');
+             }
+         } catch (e: any) {
+             typeLog(`[ERROR] Lỗi xử lý dữ liệu từ Extension: ${e.message}`, 'error');
+         }
       }
     };
 
     window.addEventListener('message', handleExtensionMessage);
     return () => window.removeEventListener('message', handleExtensionMessage);
-  }, []);
+  }, [sources]); 
 
   // -- PROJECT HANDLERS --
   const handleCreateProject = async () => {
@@ -307,7 +363,6 @@ const ScraperWorkspace: React.FC = () => {
       if (newName && newName !== proj.name) {
           try {
               await updateProject(proj.id, newName);
-              // Update local state
               setProjects(prev => prev.map(p => p.id === proj.id ? {...p, name: newName} : p));
               if (currentProject?.id === proj.id) {
                   setCurrentProject({...currentProject, name: newName});
@@ -322,10 +377,8 @@ const ScraperWorkspace: React.FC = () => {
       if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"?`)) {
           try {
               await deleteProject(proj.id);
-              // Update local state
               const remaining = projects.filter(p => p.id !== proj.id);
               setProjects(remaining);
-              // If deleted active project, select another one or null
               if (currentProject?.id === proj.id) {
                   const next = remaining.length > 0 ? remaining[0] : null;
                   setCurrentProject(next);
@@ -338,15 +391,16 @@ const ScraperWorkspace: React.FC = () => {
   };
 
   const handleSyncToCloud = async () => {
+    // Nút này bây giờ chủ yếu để Sync sang Tracking (Analysis)
+    // Vì Auto-Sync Workspace đã chạy rồi
     if (!currentUser || results.length === 0) return;
     if (!currentProject) {
         alert("Vui lòng chọn hoặc tạo DỰ ÁN trước khi lưu!");
         return;
     }
     
-    // Non-blocking save initiation
     setSavingProgress({ current: 0, total: results.length });
-    typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
+    typeLog(`[TRACKING] Đang đồng bộ dữ liệu sang hệ thống Theo Dõi Giá...`, 'system');
 
     // Async execution
     saveScrapedDataToFirestore(
@@ -358,11 +412,11 @@ const ScraperWorkspace: React.FC = () => {
              setSavingProgress({ current, total });
         }
     ).then(() => {
-        typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
+        typeLog(`[TRACKING] Đồng bộ hoàn tất!`, 'success');
         setSavingProgress(null);
-        refreshProjects(); // Update project stats
+        refreshProjects(); 
     }).catch((error: any) => {
-        typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
+        typeLog(`[ERR] Lỗi đồng bộ tracking: ${error.message}`, 'error');
         setSavingProgress(null);
     });
   };
@@ -396,13 +450,8 @@ const ScraperWorkspace: React.FC = () => {
   const handleRawCrawl = async () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
-      if (validUrls.length > 0) {
-        // --- LOGIC MỚI: Xử lý nhiều URL cho 1 Source ---
-        // Vì HTML hint hiện tại đang bị gộp chung (concatenated), ta cần cách xử lý thông minh hơn.
-        // Hiện tại: Gửi toàn bộ cục HTML Hints khổng lồ cho mỗi URL. 
-        // Gemini sẽ tự lọc sản phẩm trong HTML khớp với context.
-        return validUrls.map(url => ({ src, srcIdx, url, html: src.htmlHint }));
-      }
+      
+      // 1. Ưu tiên xử lý Manual HTML Input nếu có
       if (src.htmlHint.trim().length > 50) {
         return [{ src, srcIdx, url: "html-input-manual", html: src.htmlHint }];
       }
@@ -410,17 +459,21 @@ const ScraperWorkspace: React.FC = () => {
     });
 
     if (activeTasks.length === 0) {
-      typeLog("!! LỖI: CHƯA NHẬP DỮ LIỆU (URL hoặc HTML Code).", "error");
+      if (results.length > 0) {
+          typeLog("Đã có dữ liệu. Bạn có thể bấm 'Tối Ưu Hóa' ngay.", "warning");
+          return;
+      }
+      typeLog("!! LỖI: CHƯA NHẬP DỮ LIỆU (Paste HTML thủ công vào ô input).", "error");
       return;
     }
 
     setStatus(AppStatus.PROCESSING);
     setLogs([]);
-    typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ.`, 'system');
+    typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ (MANUAL).`, 'system');
     
     let completed = 0;
     for (const task of activeTasks) {
-      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Link: ${task.url.substring(0, 30)}...)...`, 'info');
+      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Manual Input)...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
         if (rawItems.length > 0) {
@@ -578,34 +631,40 @@ const ScraperWorkspace: React.FC = () => {
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
       {/* SAVING PROGRESS TOAST (Fixed Bottom Right) */}
-      {savingProgress && (
+      {(savingProgress || isCloudSyncing) && (
           <div className="fixed bottom-6 right-6 z-[1000] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300">
               <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                       <div className="relative">
                           <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
                           <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
-                              <UploadCloud className="w-5 h-5" />
+                              {savingProgress ? <UploadCloud className="w-5 h-5" /> : <CloudLightning className="w-5 h-5" />}
                           </div>
                       </div>
                       <div>
-                          <h4 className="text-sm font-black text-slate-800">Đang đồng bộ...</h4>
+                          <h4 className="text-sm font-black text-slate-800">
+                              {savingProgress ? 'Đang đồng bộ Tracking...' : 'Lưu tự động...'}
+                          </h4>
                           <p className="text-[10px] text-slate-500 font-bold">Dự án: {currentProject?.name}</p>
                       </div>
                   </div>
                   <Loader2 className="w-4 h-4 text-slate-300 animate-spin" />
               </div>
               
-              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
-                  <div 
-                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
-                    style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
-                  ></div>
-              </div>
-              <div className="flex justify-between text-[10px] font-bold text-slate-400">
-                  <span>Tiến độ</span>
-                  <span>{savingProgress.current} / {savingProgress.total}</span>
-              </div>
+              {savingProgress && (
+                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
+                    <div 
+                        className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                        style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
+                    ></div>
+                </div>
+              )}
+              {savingProgress && (
+                <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                    <span>Tiến độ</span>
+                    <span>{savingProgress.current} / {savingProgress.total}</span>
+                </div>
+              )}
           </div>
       )}
 
@@ -747,6 +806,11 @@ const ScraperWorkspace: React.FC = () => {
                       <FolderOpen className="w-3 h-3" />
                       {currentProject ? currentProject.name : "Chưa chọn dự án"}
                   </div>
+                  {isCloudSyncing && (
+                      <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded-lg animate-pulse">
+                          <CloudLightning className="w-3 h-3" /> Saving...
+                      </div>
+                  )}
               </div>
             </div>
           </div>
@@ -894,7 +958,7 @@ const ScraperWorkspace: React.FC = () => {
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
                    <UploadCloud className="w-4 h-4"/>
-                   {savingProgress ? 'Đang lưu...' : 'Lưu vào Firebase'}
+                   {savingProgress ? 'Đang lưu...' : 'Sync Tracking'}
                </button>
 
                <div className="h-8 w-px bg-slate-200 mx-2"></div>
