@@ -285,14 +285,39 @@ const ScraperWorkspace: React.FC = () => {
   }, []);
 
   const handleSaveApiKey = () => {
-    if (userApiKey.trim().length < 10) {
-        alert("API Key không hợp lệ. Vui lòng kiểm tra lại.");
+    // Logic mới: Không validate length < 10 nữa vì có thể user đang xóa key
+    // Chỉ cần trim và làm sạch
+    const cleaned = userApiKey.trim();
+    if (cleaned.length === 0) {
+        if(confirm("Bạn muốn xóa toàn bộ Key và dùng mặc định?")) {
+            localStorage.removeItem(API_KEY_STORAGE);
+            setUserApiKey('');
+            setShowApiKeyModal(false);
+            alert("Đã xóa Key người dùng. Sẽ dùng Key hệ thống (nếu có).");
+        }
         return;
     }
-    localStorage.setItem(API_KEY_STORAGE, userApiKey.trim());
+
+    // Tách key để kiểm tra
+    const keys = cleaned.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+    if (keys.length === 0) {
+        alert("Không tìm thấy Key hợp lệ nào (Key phải dài hơn 10 ký tự).");
+        return;
+    }
+
+    // Lưu chuỗi gốc để lần sau user mở ra vẫn thấy nguyên văn (dễ sửa)
+    // Hoặc lưu chuỗi đã chuẩn hóa. Ở đây lưu chuỗi chuẩn hóa bằng dấu phẩy
+    const savedString = keys.join(',');
+    localStorage.setItem(API_KEY_STORAGE, savedString);
     setShowApiKeyModal(false);
-    alert("Đã lưu API Key! Vui lòng thử lại chức năng quét.");
+    alert(`Đã lưu ${keys.length} API Key! Hệ thống sẽ tự động xoay vòng key.`);
   };
+
+  // Đếm số key đang nhập
+  const detectedKeysCount = useMemo(() => {
+      if (!userApiKey) return 0;
+      return userApiKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10).length;
+  }, [userApiKey]);
 
   // -- PROJECT HANDLERS --
   const handleCreateProject = async () => {
@@ -589,50 +614,60 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* API KEY MODAL */}
+      {/* API KEY MODAL (CÀI ĐẶT) - FIXED TOP PRIORITY */}
       {showApiKeyModal && (
-        <div className="fixed inset-0 bg-slate-900/80 z-[2000] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
+        <div className="fixed inset-0 bg-slate-900/90 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
            <div className="bg-[#1e293b] rounded-[2rem] p-8 max-w-lg w-full shadow-2xl border border-slate-700 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-rose-500"></div>
               
-              <div className="flex items-center gap-4 mb-6">
-                  <div className="bg-indigo-600/20 p-3 rounded-2xl">
-                      <Key className="w-8 h-8 text-indigo-400" />
-                  </div>
-                  <div>
-                      <h3 className="text-xl font-black text-white uppercase tracking-tight">Cài đặt API Key</h3>
-                      <p className="text-xs text-slate-400 font-bold">Kết nối với Gemini AI để bắt đầu quét</p>
-                  </div>
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-4">
+                    <div className="bg-indigo-600/20 p-3 rounded-2xl">
+                        <Key className="w-8 h-8 text-indigo-400" />
+                    </div>
+                    <div>
+                        <h3 className="text-xl font-black text-white uppercase tracking-tight">Cài đặt API Key</h3>
+                        <p className="text-xs text-slate-400 font-bold">Quản lý kết nối Gemini AI</p>
+                    </div>
+                </div>
+                <button onClick={() => setShowApiKeyModal(false)} className="text-slate-500 hover:text-white transition-colors"><X className="w-5 h-5"/></button>
               </div>
 
               <div className="space-y-4 mb-8">
-                  <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl flex items-start gap-3">
-                      <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                  <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-xl flex items-start gap-3">
+                      <Zap className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
                       <div>
-                          <p className="text-xs font-bold text-rose-200">Lỗi xác thực: "API key not valid"</p>
-                          <p className="text-[10px] text-rose-400 mt-1">Hệ thống chưa tìm thấy Key hoặc Key hiện tại đã hết hạn.</p>
+                          <p className="text-xs font-bold text-indigo-200">Rotation System (Hệ thống xoay vòng)</p>
+                          <p className="text-[10px] text-indigo-400 mt-1">
+                              Bạn có thể nhập <strong>nhiều API Key</strong> ngăn cách bởi dấu phẩy (,) hoặc xuống dòng. 
+                              Hệ thống sẽ tự động đổi key khi hết hạn mức (429) hoặc lỗi (400).
+                          </p>
                       </div>
                   </div>
 
                   <div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Nhập Google Gemini API Key</label>
-                      <input 
-                          type="password"
+                      <div className="flex justify-between items-center mb-2">
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">Danh sách Google Gemini Key</label>
+                         {detectedKeysCount > 0 && <span className="text-[9px] font-bold text-emerald-400 bg-emerald-900/30 px-2 py-0.5 rounded-full">Đã phát hiện {detectedKeysCount} key</span>}
+                      </div>
+                      
+                      <textarea 
                           value={userApiKey}
                           onChange={(e) => setUserApiKey(e.target.value)}
-                          placeholder="AIzaSy..."
-                          className="w-full bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+                          placeholder="AIzaSy..., AIzaSy..., AIzaSy..."
+                          className="w-full h-32 bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-mono resize-none leading-relaxed"
                       />
-                      <p className="text-[10px] text-slate-500 mt-2">
-                          Chưa có Key? <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">Lấy miễn phí tại đây</a>
+                      <p className="text-[10px] text-slate-500 mt-2 flex justify-between">
+                          <span>Chưa có Key? <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">Lấy miễn phí tại đây</a></span>
+                          <span className="text-slate-600">Mỗi key cách nhau dấu phẩy</span>
                       </p>
                   </div>
               </div>
 
               <div className="flex gap-3">
-                  <button onClick={() => setShowApiKeyModal(false)} className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase hover:bg-slate-700 transition-colors">Để sau</button>
-                  <button onClick={handleSaveApiKey} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2">
-                      <Save className="w-4 h-4" /> Lưu Key
+                  <button onClick={() => setShowApiKeyModal(false)} className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase hover:bg-slate-700 transition-colors">Đóng</button>
+                  <button onClick={handleSaveApiKey} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20">
+                      <Save className="w-4 h-4" /> Lưu Cấu Hình
                   </button>
               </div>
            </div>
@@ -846,7 +881,7 @@ const ScraperWorkspace: React.FC = () => {
                 <LogOut className="w-5 h-5" />
              </button>
 
-             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-white text-indigo-600 border border-indigo-100 rounded-[2rem] hover:bg-indigo-50 disabled:opacity-50 font-black text-[13px] shadow-sm transition-all uppercase tracking-widest">
+             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length ===0} className="flex items-center gap-3 px-10 py-5 bg-white text-indigo-600 border border-indigo-100 rounded-[2rem] hover:bg-indigo-50 disabled:opacity-50 font-black text-[13px] shadow-sm transition-all uppercase tracking-widest">
               <Download className="w-5 h-5" /> Xuất Excel
             </button>
           </div>

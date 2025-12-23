@@ -12,10 +12,19 @@ let keyList: string[] = [];
 const getKeys = (): string[] => {
   // 1. Kiểm tra LocalStorage trước (User tự nhập)
   const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
+  
+  // Logic mới: Tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
   if (localKey && localKey.length > 10) {
-      // Nếu user nhập key, ta dùng key đó làm key chính (và duy nhất)
-      keyList = [localKey];
-      return keyList;
+      const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+      if (rawKeys.length > 0) {
+          // Nếu danh sách key thay đổi so với lần trước, reset index
+          if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
+              console.log(`🔑 Đã nạp mới ${rawKeys.length} API Key từ Cài đặt.`);
+              keyList = rawKeys;
+              currentKeyIndex = 0;
+          }
+          return keyList;
+      }
   }
 
   // 2. Nếu không có LocalStorage, dùng biến môi trường
@@ -26,13 +35,12 @@ const getKeys = (): string[] => {
   // Tách key bằng dấu phẩy và làm sạch khoảng trắng
   const keys = envKey.split(',').map(k => k.trim()).filter(k => k.length > 10);
   
-  // Không throw error ở đây nữa để UI có cơ hội hiển thị popup nhập key
   if (keys.length === 0) {
-    console.warn("⚠️ Chưa có API Key trong ENV. Vui lòng nhập trên giao diện.");
+    console.warn("⚠️ Chưa có API Key. Vui lòng nhập trong phần Cài đặt.");
     return []; 
   }
 
-  console.log(`✅ Đã nạp thành công ${keys.length} API Key từ hệ thống.`);
+  console.log(`✅ Đã nạp thành công ${keys.length} API Key từ ENV.`);
   keyList = keys;
   return keys;
 };
@@ -46,18 +54,24 @@ const getAIClient = () => {
   }
 
   // Lấy key theo vòng tròn (0 -> 1 -> 2 -> 0...)
-  const key = keys[currentKeyIndex % keys.length];
+  const keyIndex = currentKeyIndex % keys.length;
+  const key = keys[keyIndex];
+  
+  // console.log(`🤖 Đang dùng Key #${keyIndex + 1} (đuôi ...${key.slice(-4)})`);
   return new GoogleGenAI({ apiKey: key });
 };
 
 // Hàm chuyển sang Key tiếp theo
 const rotateKey = (): boolean => {
   const keys = getKeys();
-  if (keys.length <= 1) return false; // Không có key dự phòng thì không đổi được
+  if (keys.length <= 1) {
+      console.warn("⚠️ Chỉ có 1 Key, không thể đổi Key khác.");
+      return false; 
+  }
   
   const prevIndex = currentKeyIndex;
   currentKeyIndex = (currentKeyIndex + 1) % keys.length;
-  console.warn(`🔄 Đổi API Key: [${prevIndex + 1}] -> [${currentKeyIndex + 1}] (Tổng: ${keys.length})`);
+  console.warn(`🔄 Đổi API Key: [Key #${prevIndex + 1}] -> [Key #${currentKeyIndex + 1}] (Tổng: ${keys.length} keys)`);
   return true;
 };
 
@@ -284,7 +298,8 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
       });
       return JSON.parse(response.text || "{}");
     } catch (error: any) {
-      if (error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429) {
+      const msg = error.message || "";
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || error.status === 429 || msg.includes('400') || msg.includes('API key')) {
          if (rotateKey()) {
              await delay(1000);
              continue; 
@@ -312,7 +327,7 @@ export const parseRawProducts = async (
 
   while (retries < maxRetries) {
     try {
-      const ai = getAIClient(); // Lấy key mới nhất
+      const ai = getAIClient(); // Lấy key mới nhất (hoặc key hiện tại)
       
       const prompt = `
         EXTRACT PRODUCTS FROM HTML.
@@ -362,21 +377,22 @@ export const parseRawProducts = async (
       });
 
     } catch (error: any) {
-      // Bắt lỗi 429 hoặc lỗi 400 INVALID_ARGUMENT (thường do key rác hoặc key gộp)
+      // Bắt lỗi 429, 400 hoặc lỗi Key
+      const msg = error.message || "";
       const shouldRotate = 
-          error.message?.includes('429') || 
-          error.message?.includes('RESOURCE_EXHAUSTED') || 
+          msg.includes('429') || 
+          msg.includes('RESOURCE_EXHAUSTED') || 
           error.status === 429 ||
           error.status === 400 || 
-          error.message?.includes('INVALID_ARGUMENT') ||
-          error.message?.includes('API key not valid'); // Bắt lỗi Key không hợp lệ
+          msg.includes('INVALID_ARGUMENT') ||
+          msg.includes('API key not valid');
       
       if (shouldRotate) {
         if (rotateKey()) {
              await delay(1000); 
              continue; // Thử lại ngay với key mới
         } else {
-             // Hết key, throw error để UI hiển thị popup nhập
+             // Hết key để đổi -> Throw để UI hiện modal nhập
              throw error;
         }
       } else {
@@ -441,6 +457,7 @@ export const processNormalization = async (
         await delay(500); 
       } catch (e) {
         console.error("Batch error", e);
+        // Nếu lỗi hàng loạt thì thử lại với Code fallback hoặc đánh dấu lỗi
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
       }
     }
