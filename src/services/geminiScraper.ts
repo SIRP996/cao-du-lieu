@@ -8,27 +8,31 @@ import { ProductData } from "../types";
 let currentKeyIndex = 0;
 let keyList: string[] = [];
 
-// Hàm lấy danh sách Key từ biến môi trường
+// Hàm lấy danh sách Key (Ưu tiên LocalStorage -> Env)
 const getKeys = (): string[] => {
+  // 1. Kiểm tra LocalStorage trước (User tự nhập)
+  const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
+  if (localKey && localKey.length > 10) {
+      // Nếu user nhập key, ta dùng key đó làm key chính (và duy nhất)
+      keyList = [localKey];
+      return keyList;
+  }
+
+  // 2. Nếu không có LocalStorage, dùng biến môi trường
   if (keyList.length > 0) return keyList;
 
-  // Vite sẽ thay thế process.env.API_KEY bằng chuỗi thực tế khi build
   const envKey = process.env.API_KEY || "";
   
   // Tách key bằng dấu phẩy và làm sạch khoảng trắng
   const keys = envKey.split(',').map(k => k.trim()).filter(k => k.length > 10);
   
+  // Không throw error ở đây nữa để UI có cơ hội hiển thị popup nhập key
   if (keys.length === 0) {
-    console.error("❌ KHÔNG TÌM THẤY API KEY!");
-    throw new Error(
-      "❌ THIẾU API KEY!\n" +
-      "Vui lòng vào Vercel > Settings > Environment Variables:\n" +
-      "Thêm Key='API_KEY', Value='Key1,Key2,Key3...' (cách nhau dấu phẩy).\n" +
-      "Sau đó REDEPLOY lại dự án."
-    );
+    console.warn("⚠️ Chưa có API Key trong ENV. Vui lòng nhập trên giao diện.");
+    return []; 
   }
 
-  console.log(`✅ Đã nạp thành công ${keys.length} API Key.`);
+  console.log(`✅ Đã nạp thành công ${keys.length} API Key từ hệ thống.`);
   keyList = keys;
   return keys;
 };
@@ -36,6 +40,11 @@ const getKeys = (): string[] => {
 // Hàm khởi tạo AI Client với Key hiện tại
 const getAIClient = () => {
   const keys = getKeys();
+  
+  if (keys.length === 0) {
+      throw new Error("MISSING_API_KEY"); // Throw lỗi đặc biệt để UI bắt
+  }
+
   // Lấy key theo vòng tròn (0 -> 1 -> 2 -> 0...)
   const key = keys[currentKeyIndex % keys.length];
   return new GoogleGenAI({ apiKey: key });
@@ -358,18 +367,17 @@ export const parseRawProducts = async (
           error.message?.includes('429') || 
           error.message?.includes('RESOURCE_EXHAUSTED') || 
           error.status === 429 ||
-          error.status === 400 || // Key hỏng/sai format cũng đổi luôn
-          error.message?.includes('INVALID_ARGUMENT');
+          error.status === 400 || 
+          error.message?.includes('INVALID_ARGUMENT') ||
+          error.message?.includes('API key not valid'); // Bắt lỗi Key không hợp lệ
       
       if (shouldRotate) {
         if (rotateKey()) {
              await delay(1000); 
              continue; // Thử lại ngay với key mới
         } else {
-             // Hết key, chờ backoff
-             await delay(currentDelay);
-             currentDelay *= 1.5;
-             retries++;
+             // Hết key, throw error để UI hiển thị popup nhập
+             throw error;
         }
       } else {
          console.error("Gemini Error:", error);

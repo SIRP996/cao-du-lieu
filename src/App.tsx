@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, CloudLightning, CheckCheck
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, Save, Key
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -12,12 +12,13 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject, syncProjectWorkspace, getProjectWorkspace } from './services/firebaseService';
+import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
 
-// Bỏ Storage Key Local cũ để dùng Cloud hoàn toàn
+const STORAGE_KEY = 'super_scraper_v22_standard_names';
 const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
+const API_KEY_STORAGE = 'USER_GEMINI_API_KEY';
 
-// --- COMPONENT NHẬP LIỆU (OPTIMIZED UI) ---
+// --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
   source, 
   index, 
@@ -33,23 +34,14 @@ const SourceInputCard = memo(({
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
   const isShopee = source.name.toUpperCase().includes('SHOPEE');
 
-  // Logic hiển thị HTML rút gọn để tránh lag UI
-  const displayHtml = useMemo(() => {
-      if (!source.htmlHint) return '';
-      if (source.htmlHint.length > 1000) {
-          return source.htmlHint.substring(0, 1000) + `\n... [ĐÃ ẨN ${source.htmlHint.length - 1000} KÝ TỰ ĐỂ TỐI ƯU HIỆU SUẤT] ...`;
-      }
-      return source.htmlHint;
-  }, [source.htmlHint]);
-
-  // Chỉ update ref khi giá trị thực sự thay đổi từ bên ngoài
   useEffect(() => {
-    // Không update htmlInputRef trực tiếp với chuỗi full html để tránh crash
-    // Chỉ update nếu user gõ tay (nhỏ)
+    if (htmlInputRef.current && htmlInputRef.current.value !== source.htmlHint) {
+        htmlInputRef.current.value = source.htmlHint;
+    }
     if (urlsInputRef.current && urlsInputRef.current.value !== source.urls.join('\n')) {
         urlsInputRef.current.value = source.urls.join('\n');
     }
-  }, [source.urls]);
+  }, [source.htmlHint, source.urls]);
 
   return (
     <div className={`bg-white p-6 rounded-[2.5rem] border shadow-sm transition-all group ${source.htmlHint ? 'border-emerald-400 shadow-emerald-100 ring-4 ring-emerald-50' : 'border-slate-200 hover:border-indigo-200'}`}>
@@ -84,7 +76,7 @@ const SourceInputCard = memo(({
           </div>
         )}
 
-        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã có dữ liệu HTML</span>}
+        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập {source.urls.filter(u=>u).length} link</span>}
       </div>
       <div className="space-y-4">
         <textarea 
@@ -97,11 +89,10 @@ const SourceInputCard = memo(({
         />
         <div className="relative">
             <textarea 
-              // Dùng value thay vì defaultValue để control hiển thị rút gọn
-              value={displayHtml}
-              // Khi user paste tay, vẫn cho phép update
-              onChange={(e) => onUpdate(index, 'htmlHint', e.target.value)} 
+              ref={htmlInputRef}
+              defaultValue={source.htmlHint}
               onFocus={() => onFocusInput(index)}
+              onBlur={(e) => onUpdate(index, 'htmlHint', e.target.value)}
               placeholder="Paste HTML Code (Body) vào đây..."
               className="w-full p-5 h-40 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600"
             />
@@ -131,12 +122,9 @@ const ScraperWorkspace: React.FC = () => {
   
   // -- STATE --
   const [sources, setSources] = useState<SourceConfig[]>(
-    Array(10).fill(null).map((_, i) => {
-      const names = [
-          "SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA",
-          "TIKI", "TIKTOK", "BEAUTY BOX", "WATSONS", "GUARDIAN"
-      ];
-      return { name: names[i] || `NGUỒN ${i + 1}`, urls: [''], htmlHint: '' };
+    Array(5).fill(null).map((_, i) => {
+      const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
+      return { name: names[i], urls: [''], htmlHint: '' };
     })
   );
   
@@ -156,11 +144,6 @@ const ScraperWorkspace: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [savingProgress, setSavingProgress] = useState<{current: number, total: number} | null>(null);
-  
-  // Cloud Sync Status
-  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-  const syncTimeoutRef = useRef<any>(null);
 
   // Tracking & Filter State
   const [showTracking, setShowTracking] = useState(false);
@@ -171,89 +154,54 @@ const ScraperWorkspace: React.FC = () => {
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'all' | 'retail' | 'combo'>('all');
   
+  // API Key State
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [userApiKey, setUserApiKey] = useState('');
+
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // -- INIT LOAD --
+  // -- EFFECTS --
   useEffect(() => {
-      if (currentUser) {
-          refreshProjects();
-      }
-  }, [currentUser]);
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try { setResults(JSON.parse(saved)); } catch (e) { console.error(e); }
+    }
+    const savedSources = localStorage.getItem(STORAGE_KEY + '_sources');
+    if (savedSources) {
+      try { setSources(JSON.parse(savedSources)); } catch (e) { console.error(e); }
+    }
+    const savedKey = localStorage.getItem(API_KEY_STORAGE);
+    if (savedKey) setUserApiKey(savedKey);
 
-  // -- CLOUD LOAD: Khi chọn dự án, tải dữ liệu workspace từ Cloud --
+  }, []);
+
   useEffect(() => {
-    const loadWorkspace = async () => {
-        if (!currentProject) return;
-        
-        setIsCloudSyncing(true); // Fake sync UI while loading
-        try {
-            const { sources: cloudSources, results: cloudResults } = await getProjectWorkspace(currentProject.id);
-            
-            // Nếu có dữ liệu trên cloud thì dùng, không thì giữ mặc định
-            if (cloudSources && cloudSources.length > 0) {
-                setSources(cloudSources);
-            } else {
-                // Reset về mặc định nếu project mới tinh
-                setSources(Array(10).fill(null).map((_, i) => {
-                    const names = [
-                        "SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA",
-                        "TIKI", "TIKTOK", "BEAUTY BOX", "WATSONS", "GUARDIAN"
-                    ];
-                    return { name: names[i] || `NGUỒN ${i + 1}`, urls: [''], htmlHint: '' };
-                }));
-            }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(results));
+  }, [results]);
 
-            if (cloudResults && cloudResults.length > 0) {
-                setResults(cloudResults);
-                typeLog(`[CLOUD] Đã khôi phục ${cloudResults.length} kết quả từ lần làm việc trước.`, 'success');
-            } else {
-                setResults([]);
-            }
-            
-            // Lưu lại ID dự án active
-            localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
-            setLastSyncTime(new Date());
-
-        } catch (e) {
-            console.error("Load cloud data failed:", e);
-            typeLog("[CLOUD ERR] Không thể tải dữ liệu dự án.", 'error');
-        } finally {
-            setIsCloudSyncing(false);
-        }
-    };
-
-    loadWorkspace();
-  }, [currentProject?.id]); // Chỉ chạy khi ID dự án thay đổi
-
-  // -- CLOUD AUTO-SAVE: Khi sources hoặc results thay đổi --
   useEffect(() => {
-      if (!currentProject) return;
-
-      // Debounce logic: Chờ 2s sau khi ngừng gõ/ngừng đổi mới lưu
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-
-      setIsCloudSyncing(true); // Hiển thị "Đang lưu..." ngay lập tức để user yên tâm
-      
-      syncTimeoutRef.current = setTimeout(async () => {
-          try {
-              await syncProjectWorkspace(currentProject.id, sources, results);
-              setLastSyncTime(new Date());
-              // Chỉ tắt trạng thái syncing sau khi lưu xong
-              setIsCloudSyncing(false);
-          } catch (e) {
-              console.error("Auto-sync failed:", e);
-              setIsCloudSyncing(false); 
-          }
-      }, 3000); // 3 giây debounce
-
-      return () => clearTimeout(syncTimeoutRef.current);
-  }, [sources, results, currentProject?.id]);
+    localStorage.setItem(STORAGE_KEY + '_sources', JSON.stringify(sources));
+  }, [sources]);
 
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Load Projects on Mount AND Restore Selected Project
+  useEffect(() => {
+      if (currentUser) {
+          refreshProjects();
+      }
+  }, [currentUser]);
+
+  // AUTO-SAVE: Khi người dùng chọn dự án, lưu ID vào localStorage
+  useEffect(() => {
+    if (currentProject) {
+        localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+    }
+  }, [currentProject]);
 
   const refreshProjects = async () => {
       if (!currentUser) return;
@@ -276,9 +224,9 @@ const ScraperWorkspace: React.FC = () => {
       }
   };
 
-  // -- EXTENSION LISTENER (OPTIMIZED FOR MEMORY) --
+  // -- EXTENSION LISTENER --
   useEffect(() => {
-    const handleExtensionMessage = async (event: MessageEvent) => {
+    const handleExtensionMessage = (event: MessageEvent) => {
       if (event.data?.type === 'SUPER_SCRAPER_EXTENSION_DATA') {
          const { html, url, title } = event.data.payload;
          typeLog(`[EXTENSION] Đã nhận dữ liệu từ: ${url}`, 'success');
@@ -292,67 +240,59 @@ const ScraperWorkspace: React.FC = () => {
          else if (lowerUrl.includes("sociolla")) targetName = "SOCIOLA";
          else if (lowerUrl.includes("thegioiskinfood")) targetName = "THEGIOISKINFOOD";
 
-         // 1. Tìm vị trí nguồn phù hợp
-         let idx = -1;
-         // Ưu tiên ô đang focus
-         if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < sources.length) {
-             idx = focusedSourceIdxRef.current;
-         } else {
-             idx = sources.findIndex(s => s.name.toUpperCase() === targetName);
-             if (idx === -1) idx = sources.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
-             if (idx === -1) idx = 0;
-         }
+         setSources(prev => {
+            const next = [...prev];
+            let idx = -1;
 
-         typeLog(`[PROCESSING] Đang xử lý dữ liệu (Extension đã tối ưu) vào Nguồn ${idx + 1}...`, 'matrix');
+            if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < next.length) {
+                idx = focusedSourceIdxRef.current;
+                typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
+            } 
+            else {
+                idx = next.findIndex(s => s.name.toUpperCase() === targetName);
+                if (idx === -1) {
+                    idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+                }
+                if (idx === -1) idx = 0;
+                typeLog(`[AUTO-FILL] Auto Detect: Nhập vào ô số ${idx + 1} (${next[idx].name})`, 'matrix');
+            }
+            
+            const currentUrls = next[idx].urls || [];
+            const newUrls = currentUrls.includes(url) 
+                ? currentUrls 
+                : [...currentUrls.filter(u => u.trim() !== ''), url];
 
-         // 2. XỬ LÝ NGAY LẬP TỨC
-         try {
-             // Hàm này sẽ dùng Gemini phân tích html đã được extension làm sạch
-             const rawItems = await parseRawProducts(url, html, idx + 1);
-             
-             if (rawItems.length > 0) {
-                 const formatted = rawItems.map(p => ({
-                    ...p,
-                    id: Math.random().toString(36).substr(2, 9),
-                    timestamp: Date.now()
-                  } as ProductData));
-                 
-                 // Thêm ngay vào kết quả -> Sẽ kích hoạt Auto-Sync
-                 setResults(prev => [...formatted, ...prev]);
-                 typeLog(`[SUCCESS] Đã thêm ${rawItems.length} sản phẩm từ Extension.`, 'success');
+            const currentHtml = next[idx].htmlHint || "";
+            const newHtml = currentHtml 
+                ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
+                : html;
 
-                 // Update URL vào Source Config
-                 setSources(prev => {
-                    const next = [...prev];
-                    const currentUrls = next[idx].urls || [];
-                    const newUrls = currentUrls.includes(url) 
-                        ? currentUrls 
-                        : [...currentUrls.filter(u => u.trim() !== ''), url];
-                    
-                    next[idx] = {
-                        ...next[idx],
-                        name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName 
-                            ? targetName 
-                            : next[idx].name,
-                        urls: newUrls,
-                        // Quan trọng: Lưu HTML đã clean vào đây để dùng cho các mục đích tái xử lý sau này
-                        // Nhưng Component SourceInputCard đã có logic rút gọn hiển thị nên không sợ lag.
-                        htmlHint: html 
-                    };
-                    return next;
-                 });
-             } else {
-                 typeLog(`[WARN] Extension gửi dữ liệu nhưng không tìm thấy sản phẩm nào.`, 'warning');
-             }
-         } catch (e: any) {
-             typeLog(`[ERROR] Lỗi xử lý dữ liệu từ Extension: ${e.message}`, 'error');
-         }
+            next[idx] = {
+                ...next[idx],
+                name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName && idx !== focusedSourceIdxRef.current 
+                    ? targetName 
+                    : next[idx].name, 
+                htmlHint: newHtml, 
+                urls: newUrls 
+            };
+            return next;
+         });
       }
     };
 
     window.addEventListener('message', handleExtensionMessage);
     return () => window.removeEventListener('message', handleExtensionMessage);
-  }, [sources]); 
+  }, []);
+
+  const handleSaveApiKey = () => {
+    if (userApiKey.trim().length < 10) {
+        alert("API Key không hợp lệ. Vui lòng kiểm tra lại.");
+        return;
+    }
+    localStorage.setItem(API_KEY_STORAGE, userApiKey.trim());
+    setShowApiKeyModal(false);
+    alert("Đã lưu API Key! Vui lòng thử lại chức năng quét.");
+  };
 
   // -- PROJECT HANDLERS --
   const handleCreateProject = async () => {
@@ -402,8 +342,6 @@ const ScraperWorkspace: React.FC = () => {
   };
 
   const handleSyncToCloud = async () => {
-    // Nút này bây giờ chủ yếu để Sync sang Tracking (Analysis)
-    // Vì Auto-Sync Workspace đã chạy rồi
     if (!currentUser || results.length === 0) return;
     if (!currentProject) {
         alert("Vui lòng chọn hoặc tạo DỰ ÁN trước khi lưu!");
@@ -411,9 +349,8 @@ const ScraperWorkspace: React.FC = () => {
     }
     
     setSavingProgress({ current: 0, total: results.length });
-    typeLog(`[TRACKING] Đang đồng bộ dữ liệu sang hệ thống Theo Dõi Giá...`, 'system');
+    typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
 
-    // Async execution
     saveScrapedDataToFirestore(
         currentUser.uid, 
         currentProject.id, 
@@ -423,11 +360,11 @@ const ScraperWorkspace: React.FC = () => {
              setSavingProgress({ current, total });
         }
     ).then(() => {
-        typeLog(`[TRACKING] Đồng bộ hoàn tất!`, 'success');
+        typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
         setSavingProgress(null);
         refreshProjects(); 
     }).catch((error: any) => {
-        typeLog(`[ERR] Lỗi đồng bộ tracking: ${error.message}`, 'error');
+        typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
         setSavingProgress(null);
     });
   };
@@ -461,8 +398,9 @@ const ScraperWorkspace: React.FC = () => {
   const handleRawCrawl = async () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
-      
-      // 1. Ưu tiên xử lý Manual HTML Input nếu có
+      if (validUrls.length > 0) {
+        return validUrls.map(url => ({ src, srcIdx, url, html: src.htmlHint }));
+      }
       if (src.htmlHint.trim().length > 50) {
         return [{ src, srcIdx, url: "html-input-manual", html: src.htmlHint }];
       }
@@ -470,21 +408,17 @@ const ScraperWorkspace: React.FC = () => {
     });
 
     if (activeTasks.length === 0) {
-      if (results.length > 0) {
-          typeLog("Đã có dữ liệu. Bạn có thể bấm 'Tối Ưu Hóa' ngay.", "warning");
-          return;
-      }
-      typeLog("!! LỖI: CHƯA NHẬP DỮ LIỆU (Paste HTML thủ công vào ô input).", "error");
+      typeLog("!! LỖI: CHƯA NHẬP DỮ LIỆU (URL hoặc HTML Code).", "error");
       return;
     }
 
     setStatus(AppStatus.PROCESSING);
     setLogs([]);
-    typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ (MANUAL).`, 'system');
+    typeLog(`>>> GIAI ĐOẠN 1: QUÉT DỮ LIỆU THÔ.`, 'system');
     
     let completed = 0;
     for (const task of activeTasks) {
-      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Manual Input)...`, 'info');
+      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Link: ${task.url.substring(0, 30)}...)...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
         if (rawItems.length > 0) {
@@ -498,8 +432,16 @@ const ScraperWorkspace: React.FC = () => {
         } else {
             typeLog(`[WARN] Không tìm thấy dữ liệu.`, 'warning');
         }
-      } catch (err) {
-        typeLog(`[ERR] Lỗi xử lý ${task.src.name}: ${String(err)}`, 'error');
+      } catch (err: any) {
+        // Handle API KEY Errors explicitly
+        const msg = String(err.message || err);
+        if (msg.includes("API key not valid") || msg.includes("MISSING_API_KEY") || msg.includes("400")) {
+             typeLog(`[CRITICAL] Lỗi API Key: ${msg}`, 'error');
+             setShowApiKeyModal(true); // Auto open modal
+             setStatus(AppStatus.ERROR);
+             return; // Stop processing
+        }
+        typeLog(`[ERR] Lỗi xử lý ${task.src.name}: ${msg}`, 'error');
       }
       completed++;
       setProgress(Math.round((completed / activeTasks.length) * 100));
@@ -518,8 +460,14 @@ const ScraperWorkspace: React.FC = () => {
       setResults(optimizedResults);
       typeLog(`[OK] Đã tối ưu hóa ${optimizedResults.length} sản phẩm.`, 'success');
       setShowSuccessModal(true);
-    } catch (e) {
-      typeLog(`[ERR] Lỗi tối ưu hóa: ${String(e)}`, 'error');
+    } catch (e: any) {
+      const msg = String(e.message || e);
+       if (msg.includes("API key not valid") || msg.includes("MISSING_API_KEY")) {
+             typeLog(`[CRITICAL] Lỗi API Key khi tối ưu: ${msg}`, 'error');
+             setShowApiKeyModal(true); 
+      } else {
+        typeLog(`[ERR] Lỗi tối ưu hóa: ${msg}`, 'error');
+      }
     }
     setNormalizationStatus(AppStatus.COMPLETED);
   };
@@ -641,41 +589,85 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* SAVING PROGRESS TOAST (Fixed Bottom Right) */}
-      {(savingProgress || isCloudSyncing) && (
+      {/* API KEY MODAL */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 bg-slate-900/80 z-[2000] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
+           <div className="bg-[#1e293b] rounded-[2rem] p-8 max-w-lg w-full shadow-2xl border border-slate-700 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-rose-500"></div>
+              
+              <div className="flex items-center gap-4 mb-6">
+                  <div className="bg-indigo-600/20 p-3 rounded-2xl">
+                      <Key className="w-8 h-8 text-indigo-400" />
+                  </div>
+                  <div>
+                      <h3 className="text-xl font-black text-white uppercase tracking-tight">Cài đặt API Key</h3>
+                      <p className="text-xs text-slate-400 font-bold">Kết nối với Gemini AI để bắt đầu quét</p>
+                  </div>
+              </div>
+
+              <div className="space-y-4 mb-8">
+                  <div className="bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                      <div>
+                          <p className="text-xs font-bold text-rose-200">Lỗi xác thực: "API key not valid"</p>
+                          <p className="text-[10px] text-rose-400 mt-1">Hệ thống chưa tìm thấy Key hoặc Key hiện tại đã hết hạn.</p>
+                      </div>
+                  </div>
+
+                  <div>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Nhập Google Gemini API Key</label>
+                      <input 
+                          type="password"
+                          value={userApiKey}
+                          onChange={(e) => setUserApiKey(e.target.value)}
+                          placeholder="AIzaSy..."
+                          className="w-full bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-2">
+                          Chưa có Key? <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-400 hover:underline">Lấy miễn phí tại đây</a>
+                      </p>
+                  </div>
+              </div>
+
+              <div className="flex gap-3">
+                  <button onClick={() => setShowApiKeyModal(false)} className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase hover:bg-slate-700 transition-colors">Để sau</button>
+                  <button onClick={handleSaveApiKey} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2">
+                      <Save className="w-4 h-4" /> Lưu Key
+                  </button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* SAVING PROGRESS TOAST */}
+      {savingProgress && (
           <div className="fixed bottom-6 right-6 z-[1000] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300">
               <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                       <div className="relative">
                           <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
                           <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
-                              {savingProgress ? <UploadCloud className="w-5 h-5" /> : <CloudLightning className="w-5 h-5" />}
+                              <UploadCloud className="w-5 h-5" />
                           </div>
                       </div>
                       <div>
-                          <h4 className="text-sm font-black text-slate-800">
-                              {savingProgress ? 'Đang đồng bộ Tracking...' : 'Lưu tự động...'}
-                          </h4>
+                          <h4 className="text-sm font-black text-slate-800">Đang đồng bộ...</h4>
                           <p className="text-[10px] text-slate-500 font-bold">Dự án: {currentProject?.name}</p>
                       </div>
                   </div>
                   <Loader2 className="w-4 h-4 text-slate-300 animate-spin" />
               </div>
               
-              {savingProgress && (
-                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
-                    <div 
-                        className="bg-indigo-600 h-full transition-all duration-300 ease-out"
-                        style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
-                    ></div>
-                </div>
-              )}
-              {savingProgress && (
-                <div className="flex justify-between text-[10px] font-bold text-slate-400">
-                    <span>Tiến độ</span>
-                    <span>{savingProgress.current} / {savingProgress.total}</span>
-                </div>
-              )}
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
+                  ></div>
+              </div>
+              <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                  <span>Tiến độ</span>
+                  <span>{savingProgress.current} / {savingProgress.total}</span>
+              </div>
           </div>
       )}
 
@@ -805,47 +797,22 @@ const ScraperWorkspace: React.FC = () => {
       <div className="max-w-[1700px] mx-auto p-4 md:p-8 space-y-8">
         
         {/* Header Section */}
-        <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm shadow-slate-200/50 relative overflow-hidden">
-           {/* Background Gradient */}
-           <div className="absolute top-0 right-0 w-1/3 h-full bg-gradient-to-l from-indigo-50/50 to-transparent pointer-events-none"></div>
-
-          <div className="flex items-center gap-6 z-10">
+        <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm shadow-slate-200/50">
+          <div className="flex items-center gap-6">
             <div className="bg-indigo-600 p-5 rounded-[2rem] shadow-xl shadow-indigo-100">
               <Cpu className="w-8 h-8 text-white animate-pulse" />
             </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.5</span></h1>
-              <div className="flex items-center gap-4 mt-2">
-                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+              <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
                       <FolderOpen className="w-3 h-3" />
                       {currentProject ? currentProject.name : "Chưa chọn dự án"}
-                  </div>
-                  
-                  {/* CLOUD SYNC STATUS INDICATOR (ENHANCED) */}
-                  <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-4 py-1.5 rounded-lg transition-all duration-300 shadow-sm border ${
-                      isCloudSyncing 
-                      ? 'bg-amber-50 text-amber-600 border-amber-200' 
-                      : 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                  }`}>
-                      {isCloudSyncing ? (
-                          <>
-                            <div className="relative">
-                                <CloudLightning className="w-3 h-3 animate-bounce" />
-                                <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping"></div>
-                            </div>
-                            <span>Đang đồng bộ...</span>
-                          </>
-                      ) : (
-                          <>
-                            <CheckCheck className="w-3 h-3" /> 
-                            <span>Đã lưu Cloud {lastSyncTime ? `(${lastSyncTime.toLocaleTimeString()})` : ''}</span>
-                          </>
-                      )}
                   </div>
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-4 z-10">
+          <div className="flex flex-wrap items-center gap-4">
              {currentUser && (
                <div 
                  onClick={() => { refreshProjects(); setShowProjectManager(true); }}
@@ -863,6 +830,15 @@ const ScraperWorkspace: React.FC = () => {
                   </div>
                </div>
              )}
+
+             {/* API KEY BUTTON */}
+             <button 
+                onClick={() => setShowApiKeyModal(true)}
+                className="p-3 bg-slate-900 text-yellow-400 hover:bg-slate-800 rounded-full transition-all border-2 border-slate-800 hover:border-yellow-400 shadow-lg" 
+                title="Cài đặt API Key"
+             >
+                <Key className="w-5 h-5" />
+             </button>
 
              <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu tạm?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Temp</button>
              
@@ -989,7 +965,7 @@ const ScraperWorkspace: React.FC = () => {
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
                    <UploadCloud className="w-4 h-4"/>
-                   {savingProgress ? 'Đang lưu...' : 'Sync Tracking'}
+                   {savingProgress ? 'Đang lưu...' : 'Lưu vào Firebase'}
                </button>
 
                <div className="h-8 w-px bg-slate-200 mx-2"></div>
