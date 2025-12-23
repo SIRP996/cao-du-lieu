@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { TrackingProduct } from '../types';
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { TrackingProduct, TrackingSourceData } from '../types';
 import { 
-  TrendingUp, TrendingDown, Clock, ExternalLink, 
-  Search, BarChart3, ArrowUpRight, ArrowDownRight, RefreshCw, Zap, ArrowLeft
+  TrendingUp, TrendingDown, Clock,
+  Search, RefreshCw, ArrowLeft, Play, Activity, Zap, AlertCircle, Minus
 } from 'lucide-react';
+import { refreshAllPrices } from '../services/trackingService';
 
 interface Props {
   data: TrackingProduct[];
@@ -12,190 +14,347 @@ interface Props {
   onRefresh: () => void;
 }
 
-// --- SVG CHART COMPONENT ---
-const HistoryChart = ({ history, color }: { history: any[], color: string }) => {
-    if (!history || history.length < 2) return <div className="h-20 flex items-center justify-center text-[10px] text-slate-300">Chưa đủ dữ liệu</div>;
-    
-    const prices = history.map(h => h.price);
+// --- CONFIG ---
+const AUTO_SCAN_INTERVAL_MINUTES = 60; // Quét thật mỗi 60 phút (theo yêu cầu 1-2 tiếng/lần)
+
+// --- HELPER COMPONENTS ---
+const MiniSparkline = ({ history, color }: { history: any[], color: string }) => {
+    if (!history || history.length < 2) return <div className="h-8 w-16 bg-slate-700/30 rounded opacity-30"></div>;
+    const prices = history.slice(-7).map(h => h.avgPrice || h.price);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
     const range = max - min || 1;
     
-    // Tạo points cho SVG polyline
     const points = prices.map((val, i) => {
-        const x = (i / (prices.length - 1)) * 100;
-        const y = 100 - ((val - min) / range) * 80 - 10; // Padding top/bottom
+        const x = (i / (prices.length - 1)) * 60;
+        const y = 30 - ((val - min) / range) * 20 - 5;
         return `${x},${y}`;
     }).join(' ');
 
     return (
-        <div className="relative h-24 w-full">
-            <svg viewBox="0 0 100 100" className="w-full h-full overflow-visible" preserveAspectRatio="none">
-                <polyline
-                    fill="none"
-                    stroke={color}
-                    strokeWidth="2"
-                    points={points}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    vectorEffect="non-scaling-stroke"
-                />
-                {/* Dots */}
-                {prices.map((val, i) => {
-                     const x = (i / (prices.length - 1)) * 100;
-                     const y = 100 - ((val - min) / range) * 80 - 10;
-                     return <circle key={i} cx={x} cy={y} r="3" fill="white" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
-                })}
-            </svg>
-            <div className="absolute top-0 left-0 text-[9px] text-slate-400 font-bold bg-white/80 px-1 rounded">{max.toLocaleString()}</div>
-            <div className="absolute bottom-0 left-0 text-[9px] text-slate-400 font-bold bg-white/80 px-1 rounded">{min.toLocaleString()}</div>
+        <svg width="60" height="30" className="overflow-visible">
+            <polyline fill="none" stroke={color} strokeWidth="2" points={points} strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx={(prices.length-1) * (60/(prices.length-1))} cy={30 - ((prices[prices.length-1] - min) / range) * 20 - 5} r="2.5" fill={color} />
+        </svg>
+    );
+};
+
+const PriceCell = ({ data }: { data: any }) => {
+    if (!data) return <div className="text-center text-slate-600 font-mono">-</div>;
+    
+    const currentPrice = data.price;
+    const history = data.history || [];
+    const prevPrice = history.length > 1 ? history[history.length - 2].avgPrice : currentPrice;
+    
+    const diff = currentPrice - prevPrice;
+    const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
+    
+    let colorClass = '';
+    let arrowIcon = null;
+    let containerClass = '';
+
+    if (diff > 0) {
+        // TĂNG
+        colorClass = 'text-emerald-400';
+        containerClass = 'bg-emerald-500/10 border-emerald-500/20 shadow-[0_0_15px_rgba(52,211,153,0.15)]';
+        arrowIcon = <TrendingUp className="w-3 h-3 text-emerald-400" />;
+    } else if (diff < 0) {
+        // GIẢM
+        colorClass = 'text-rose-400';
+        containerClass = 'bg-rose-500/10 border-rose-500/20 shadow-[0_0_15px_rgba(251,113,133,0.15)]';
+        arrowIcon = <TrendingDown className="w-3 h-3 text-rose-400" />;
+    } else {
+        // KHÔNG ĐỔI
+        colorClass = 'text-yellow-400';
+        containerClass = 'bg-yellow-500/5 border-yellow-500/10'; // Nền vàng rất nhẹ
+        arrowIcon = <Minus className="w-3 h-3 text-yellow-500/50" />;
+    }
+
+    return (
+        <div className={`flex flex-col items-end justify-center p-2.5 rounded-xl border transition-all duration-300 ${containerClass}`}>
+            <div className={`text-[13px] font-black tracking-tighter flex items-center gap-1.5 ${colorClass}`}>
+                {arrowIcon}
+                {currentPrice.toLocaleString()}đ
+            </div>
+            {diff !== 0 ? (
+                <div className="text-[10px] font-bold opacity-80 flex items-center gap-1 mt-0.5 text-slate-400">
+                    <span className="line-through opacity-50">{prevPrice.toLocaleString()}</span>
+                    <span className={`${diff > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        ({diff > 0 ? '+' : ''}{percent.toFixed(1)}%)
+                    </span>
+                </div>
+            ) : (
+                <div className="text-[9px] font-bold text-slate-500 mt-0.5 flex items-center gap-1">
+                   <Clock className="w-2.5 h-2.5" />
+                   {history.length > 0 ? `Cập nhật: ${history[history.length-1].logs?.slice(-1)[0]?.time || 'Hôm nay'}` : 'Chưa có log'}
+                </div>
+            )}
         </div>
     );
 };
 
-const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading, onRefresh }) => {
-  const [selectedProduct, setSelectedProduct] = useState<TrackingProduct | null>(null);
+const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: parentLoading, onRefresh }) => {
+  const [localData, setLocalData] = useState<TrackingProduct[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Real Scanning State
+  const [isAutoScanMode, setIsAutoScanMode] = useState(false); // Chế độ tự động
+  const [isScanning, setIsScanning] = useState(false); // Đang thực sự quét
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanMessage, setScanMessage] = useState('');
+  const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
+  
+  const scanIntervalRef = useRef<any>(null);
 
   useEffect(() => {
-    if (data.length > 0 && !selectedProduct) {
-        setSelectedProduct(data[0]);
-    }
+      setLocalData(data);
   }, [data]);
 
-  const filteredData = useMemo(() => {
-    return data.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [data, searchTerm]);
+  // --- AUTO SCAN TIMER ---
+  useEffect(() => {
+      if (isAutoScanMode) {
+          // Set timer để quét mỗi X phút
+          scanIntervalRef.current = setInterval(() => {
+              if (!isScanning) {
+                  handleRealScan();
+              }
+          }, AUTO_SCAN_INTERVAL_MINUTES * 60 * 1000);
+      } else {
+          clearInterval(scanIntervalRef.current);
+      }
+      return () => clearInterval(scanIntervalRef.current);
+  }, [isAutoScanMode, isScanning]);
 
-  if (isLoading) {
-      return (
-          <div className="min-h-screen flex items-center justify-center bg-slate-50">
-              <div className="text-center">
-                  <RefreshCw className="w-10 h-10 text-indigo-600 animate-spin mx-auto mb-4" />
-                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">Đang tải dữ liệu từ Cloud...</p>
-              </div>
-          </div>
-      );
-  }
+  // --- CORE SCAN FUNCTION ---
+  const handleRealScan = async () => {
+      if (isScanning || localData.length === 0) return;
+      
+      setIsScanning(true);
+      setScanProgress(0);
+      setScanMessage("Đang khởi động...");
+
+      try {
+          // Gọi service quét thật
+          const updated = await refreshAllPrices(localData, (msg, percent) => {
+              setScanMessage(msg);
+              setScanProgress(percent);
+          });
+          
+          setLocalData([...updated]);
+          setLastScanTime(new Date());
+          onRefresh(); // Trigger parent refresh (optional)
+      } catch (e) {
+          console.error("Scan error:", e);
+          setScanMessage("Lỗi khi quét!");
+      } finally {
+          setIsScanning(false);
+          setScanMessage("");
+      }
+  };
+
+  const filteredData = useMemo(() => {
+    return localData.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  }, [localData, searchTerm]);
+
+  const sourceColumns = useMemo(() => {
+      const sources = new Set<string>();
+      localData.forEach(p => Object.keys(p.sources).forEach(s => sources.add(s)));
+      
+      const priority = ['shopee', 'lazada', 'tiki', 'tiktok', 'web'];
+      
+      return Array.from(sources).sort((a, b) => {
+          const idxA = priority.indexOf(a.toLowerCase()) !== -1 ? priority.indexOf(a.toLowerCase()) : 99;
+          const idxB = priority.indexOf(b.toLowerCase()) !== -1 ? priority.indexOf(b.toLowerCase()) : 99;
+          
+          if (idxA !== idxB) return idxA - idxB;
+          return a.localeCompare(b);
+      }).slice(0, 5);
+  }, [localData]);
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 p-4 md:p-6 animate-in fade-in duration-500 font-sans relative">
       
-      {/* HEADER */}
-      <div className="flex items-center justify-between mb-8 bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm">
-        <div className="flex items-center gap-4">
-            <button onClick={onBack} className="p-3 hover:bg-slate-100 rounded-full transition-colors">
-                <ArrowLeft className="w-6 h-6 text-slate-600" />
+      {/* SCANNING TOAST (NON-BLOCKING) */}
+      {isScanning && (
+          <div className="fixed bottom-6 right-6 z-[100] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300 pointer-events-auto">
+              <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                      <div className="relative">
+                          <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
+                          <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
+                              <RefreshCw className="w-5 h-5 animate-spin" />
+                          </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                          <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Đang Quét Giá...</h4>
+                          <p className="text-[10px] text-slate-500 font-bold truncate pr-2">{scanMessage}</p>
+                      </div>
+                  </div>
+                  <span className="text-xs font-black text-indigo-600">{scanProgress}%</span>
+              </div>
+              
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{width: `${scanProgress}%`}}
+                  ></div>
+              </div>
+          </div>
+      )}
+
+      {/* HEADER CONTROL */}
+      <div className="sticky top-0 z-50 bg-[#1e293b]/90 backdrop-blur-md p-4 rounded-3xl border border-slate-700 shadow-2xl mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-4 w-full md:w-auto">
+            <button onClick={onBack} className="p-3 hover:bg-slate-700 rounded-2xl transition-colors">
+                <ArrowLeft className="w-5 h-5 text-slate-400" />
             </button>
             <div>
-                <h1 className="text-2xl font-black text-slate-900 uppercase tracking-tighter flex items-center gap-2">
-                    <TrendingUp className="w-8 h-8 text-indigo-600" /> Price Tracker
+                <h1 className="text-xl font-black uppercase tracking-widest text-white flex items-center gap-2">
+                    <Zap className="w-6 h-6 text-yellow-400 fill-current" /> 
+                    Real-Time Board
                 </h1>
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Giám sát biến động giá theo thời gian thực</p>
+                <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                    <span>{filteredData.length} Mã</span>
+                    <span className="w-1 h-1 bg-slate-500 rounded-full"></span>
+                    <span>Last Update: {lastScanTime ? lastScanTime.toLocaleTimeString() : 'Chờ lệnh'}</span>
+                </div>
             </div>
         </div>
-        <div className="flex items-center gap-4">
-             <div className="relative">
-                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+
+        <div className="flex items-center gap-3 w-full md:w-auto">
+             {/* Auto Mode Switch */}
+             <div className="flex items-center gap-2 bg-slate-800 p-1.5 rounded-xl border border-slate-700 mr-2">
+                 <button 
+                    onClick={() => setIsAutoScanMode(false)}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all ${!isAutoScanMode ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                 >
+                    Thủ công
+                 </button>
+                 <button 
+                    onClick={() => setIsAutoScanMode(true)}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all flex items-center gap-1 ${isAutoScanMode ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                 >
+                    <Clock className="w-3 h-3" /> Auto (1h)
+                 </button>
+             </div>
+
+             {/* Manual Trigger Button */}
+             <button 
+                onClick={handleRealScan}
+                disabled={isScanning}
+                className={`flex items-center gap-3 px-6 py-3 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-lg ${isScanning ? 'bg-indigo-900/50 text-indigo-400 cursor-not-allowed border border-indigo-800' : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-900/50'}`}
+             >
+                {isScanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+                {isScanning ? 'Đang chạy nền...' : 'Cập nhật giá ngay'}
+             </button>
+
+             <div className="relative flex-1 md:w-56">
+                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                  <input 
                    type="text" 
-                   placeholder="Tìm sản phẩm..." 
+                   placeholder="Lọc mã..." 
                    value={searchTerm}
                    onChange={(e) => setSearchTerm(e.target.value)}
-                   className="pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20 w-64"
+                   className="w-full pl-10 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:ring-2 focus:ring-indigo-500/50"
                  />
              </div>
-             <button onClick={onRefresh} className="p-3 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-colors">
-                 <RefreshCw className="w-5 h-5" />
-             </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-12 gap-6 h-[calc(100vh-180px)]">
-         
-         {/* LEFT LIST */}
-         <div className="col-span-4 bg-white rounded-[2.5rem] border border-slate-200 shadow-xl overflow-hidden flex flex-col">
-            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                <h3 className="text-sm font-black uppercase text-slate-500 tracking-widest">Danh sách theo dõi ({filteredData.length})</h3>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                {filteredData.map(product => (
-                    <div 
-                      key={product.id}
-                      onClick={() => setSelectedProduct(product)}
-                      className={`p-5 rounded-2xl cursor-pointer transition-all border ${selectedProduct?.id === product.id ? 'bg-indigo-600 border-indigo-600 shadow-lg shadow-indigo-200' : 'bg-white border-slate-100 hover:border-indigo-200 hover:bg-slate-50'}`}
-                    >
-                        <h4 className={`text-xs font-bold mb-2 line-clamp-2 leading-relaxed ${selectedProduct?.id === product.id ? 'text-white' : 'text-slate-800'}`}>
-                            {product.name}
-                        </h4>
-                        <div className="flex justify-between items-end">
-                            <span className={`text-[10px] uppercase font-black tracking-wider px-2 py-1 rounded-md ${selectedProduct?.id === product.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                                {product.category}
-                            </span>
-                            <span className={`text-[10px] ${selectedProduct?.id === product.id ? 'text-indigo-200' : 'text-slate-400'}`}>
-                                {new Date(product.lastUpdated).toLocaleDateString('vi-VN')}
-                            </span>
-                        </div>
-                    </div>
-                ))}
-            </div>
-         </div>
+      {/* MATRIX TABLE */}
+      <div className="bg-[#1e293b] rounded-[2rem] border border-slate-700 shadow-2xl overflow-hidden min-h-[600px]">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-left border-collapse min-w-[1200px]">
+                <thead>
+                    <tr className="bg-slate-800/50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-700">
+                        <th className="p-6 w-[25%]">Sản Phẩm / Mã SKU</th>
+                        {sourceColumns.map((src, i) => (
+                            <th key={i} className="p-6 text-right w-[12%] bg-slate-800/30 border-l border-slate-700">
+                                {src.toUpperCase()}
+                            </th>
+                        ))}
+                        <th className="p-6 text-center w-[10%] border-l border-slate-700">Trend</th>
+                        <th className="p-6 text-center w-[5%] border-l border-slate-700">Alert</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50 text-sm">
+                    {filteredData.map((product) => {
+                        const totalChanges = Object.values(product.sources).reduce((acc: number, src: any) => {
+                            const history = src.history || [];
+                            const uniquePrices = new Set(history.map((h: any) => h.avgPrice || h.price));
+                            return acc + (uniquePrices.size - 1 > 0 ? uniquePrices.size - 1 : 0);
+                        }, 0);
+                        
+                        // Explicitly get the first source data for Sparkline and type cast it
+                        const firstSourceData = Object.values(product.sources)[0] as TrackingSourceData | undefined;
 
-         {/* RIGHT DETAILS */}
-         <div className="col-span-8 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-            {selectedProduct ? (
-                <>
-                   {/* HERO CARD */}
-                   <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl relative overflow-hidden">
-                       <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-bl-[100%] -mr-10 -mt-10"></div>
-                       <h2 className="text-2xl font-black text-slate-800 mb-6 relative z-10">{selectedProduct.name}</h2>
-                       
-                       <div className="grid grid-cols-2 md:grid-cols-3 gap-4 relative z-10">
-                           {Object.entries(selectedProduct.sources).map(([source, data]: [string, any]) => {
-                               const history = data.history || [];
-                               const currentPrice = data.price;
-                               // Lấy giá hôm qua để so sánh
-                               const prevPrice = history.length > 1 ? history[history.length - 2].price : currentPrice;
-                               const diff = currentPrice - prevPrice;
-                               const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
+                        return (
+                            <tr key={product.id} className="hover:bg-slate-700/30 transition-colors group">
+                                <td className="p-6">
+                                    <div className="flex flex-col gap-1">
+                                        <span className="text-white font-bold leading-snug group-hover:text-indigo-400 transition-colors">{product.name}</span>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-[9px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-600 uppercase tracking-wider">{product.category}</span>
+                                        </div>
+                                    </div>
+                                </td>
 
-                               return (
-                                   <div key={source} className="bg-slate-50 p-5 rounded-2xl border border-slate-100 hover:border-indigo-200 transition-all group">
-                                       <div className="flex justify-between items-start mb-3">
-                                           <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{source}</span>
-                                           <a href={data.url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:text-indigo-600"><ExternalLink className="w-4 h-4" /></a>
-                                       </div>
-                                       <div className="flex items-baseline gap-2 mb-1">
-                                           <span className="text-xl font-black text-slate-800">{currentPrice.toLocaleString()}đ</span>
-                                       </div>
-                                       
-                                       {diff !== 0 && (
-                                            <div className={`flex items-center gap-1 text-[10px] font-bold ${diff > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                                {diff > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                                <span>{Math.abs(percent).toFixed(1)}%</span>
-                                            </div>
-                                       )}
-                                       {diff === 0 && <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1"><Clock className="w-3 h-3" /> Ổn định</span>}
+                                {sourceColumns.map((colKey, i) => {
+                                    const actualKey = Object.keys(product.sources).find(k => k.toLowerCase() === colKey.toLowerCase()) || colKey;
+                                    const sourceData = product.sources[actualKey];
+                                    return (
+                                        <td key={i} className="p-4 border-l border-slate-700/50 bg-slate-800/10">
+                                            <PriceCell data={sourceData} />
+                                        </td>
+                                    );
+                                })}
 
-                                       {/* Mini History Chart */}
-                                       <div className="mt-4 pt-4 border-t border-slate-100 opacity-50 group-hover:opacity-100 transition-opacity">
-                                           <HistoryChart history={history} color={diff > 0 ? '#f43f5e' : (diff < 0 ? '#10b981' : '#6366f1')} />
-                                       </div>
-                                   </div>
-                               );
-                           })}
-                       </div>
-                   </div>
-                </>
-            ) : (
-                <div className="h-full flex flex-col items-center justify-center text-slate-400 bg-white rounded-[2.5rem] border border-slate-200 border-dashed">
-                    <BarChart3 className="w-16 h-16 mb-4 opacity-50" />
-                    <p className="font-bold uppercase tracking-widest">Chọn sản phẩm để xem chi tiết</p>
-                </div>
-            )}
-         </div>
+                                <td className="p-4 text-center border-l border-slate-700/50">
+                                    <div className="flex justify-center">
+                                        <MiniSparkline 
+                                            history={firstSourceData?.history || []} 
+                                            color="#6366f1" 
+                                        />
+                                    </div>
+                                </td>
 
+                                <td className="p-4 text-center border-l border-slate-700/50">
+                                    {totalChanges > 0 ? (
+                                        <div className="inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-black bg-rose-500 text-white animate-pulse">
+                                            !
+                                        </div>
+                                    ) : (
+                                        <div className="text-slate-600 opacity-50"><Activity className="w-4 h-4"/></div>
+                                    )}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                    {filteredData.length === 0 && (
+                        <tr>
+                            <td colSpan={10} className="py-20 text-center text-slate-500 italic">
+                                <div className="flex flex-col items-center gap-4">
+                                    <AlertCircle className="w-10 h-10 text-slate-600" />
+                                    <span>Chưa có sản phẩm theo dõi</span>
+                                </div>
+                            </td>
+                        </tr>
+                    )}
+                </tbody>
+            </table>
+          </div>
       </div>
+      
+      <div className="mt-6 text-center text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+         {isAutoScanMode ? 'AUTO-PILOT ACTIVE: WILL SCAN EVERY 60 MINS' : 'MANUAL MODE'} • KEEP TAB OPEN
+      </div>
+      
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+      `}</style>
     </div>
   );
 };

@@ -1,9 +1,10 @@
+
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings
 } from 'lucide-react';
-import { ProductData, AppStatus, SourceConfig, TrackingProduct } from './types';
+import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
 import { exportToMultiSheetExcel } from './utils/excelExport';
 
@@ -11,19 +12,22 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts } from './services/firebaseService';
+import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
+const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
 
 // --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
 const SourceInputCard = memo(({ 
   source, 
   index, 
-  onUpdate 
+  onUpdate,
+  onFocusInput
 }: { 
   source: SourceConfig, 
   index: number, 
-  onUpdate: (idx: number, field: keyof SourceConfig, val: any) => void 
+  onUpdate: (idx: number, field: keyof SourceConfig, val: any) => void,
+  onFocusInput: (idx: number) => void
 }) => {
   const htmlInputRef = useRef<HTMLTextAreaElement>(null);
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
@@ -48,6 +52,7 @@ const SourceInputCard = memo(({
            <input 
             type="text" 
             defaultValue={source.name} 
+            onFocus={() => onFocusInput(index)}
             onBlur={(e) => onUpdate(index, 'name', e.target.value)}
             className="bg-transparent border-none p-0 text-xs font-black uppercase tracking-widest text-slate-700 outline-none w-full focus:text-indigo-600 transition-colors"
            />
@@ -62,6 +67,7 @@ const SourceInputCard = memo(({
                min="0"
                max="100"
                defaultValue={source.voucherPercent || ''}
+               onFocus={() => onFocusInput(index)}
                onChange={(e) => onUpdate(index, 'voucherPercent', Number(e.target.value))}
                className="w-16 bg-transparent text-[10px] font-bold text-orange-600 placeholder:text-orange-300 outline-none text-right"
              />
@@ -69,12 +75,13 @@ const SourceInputCard = memo(({
           </div>
         )}
 
-        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập</span>}
+        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã nhập {source.urls.filter(u=>u).length} link</span>}
       </div>
       <div className="space-y-4">
         <textarea 
           ref={urlsInputRef}
           defaultValue={source.urls.join('\n')}
+          onFocus={() => onFocusInput(index)}
           onBlur={(e) => onUpdate(index, 'urls', e.target.value.split('\n'))}
           placeholder="Dán danh sách URL (mỗi dòng 1 link)..."
           className="w-full p-5 h-32 bg-slate-50 border border-slate-100 rounded-3xl text-[11px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all"
@@ -83,6 +90,7 @@ const SourceInputCard = memo(({
             <textarea 
               ref={htmlInputRef}
               defaultValue={source.htmlHint}
+              onFocus={() => onFocusInput(index)}
               onBlur={(e) => onUpdate(index, 'htmlHint', e.target.value)}
               placeholder="Paste HTML Code (Body) vào đây..."
               className="w-full p-5 h-40 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600"
@@ -107,17 +115,24 @@ interface CrawlLog {
   type: 'info' | 'success' | 'error' | 'warning' | 'ai' | 'matrix' | 'system';
 }
 
-// --- MAIN WORKSPACE COMPONENT (Trước đây là Dashboard, đổi tên để tránh nhầm lẫn) ---
+// --- MAIN WORKSPACE COMPONENT ---
 const ScraperWorkspace: React.FC = () => {
   const { currentUser, logout } = useAuth(); 
   
   // -- STATE --
   const [sources, setSources] = useState<SourceConfig[]>(
-    Array(5).fill(null).map((_, i) => {
-      const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
-      return { name: names[i], urls: [''], htmlHint: '' };
+    Array(10).fill(null).map((_, i) => {
+      const names = [
+          "SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA",
+          "TIKI", "TIKTOK", "BEAUTY BOX", "WATSONS", "GUARDIAN"
+      ];
+      return { name: names[i] || `NGUỒN ${i + 1}`, urls: [''], htmlHint: '' };
     })
   );
+  
+  // Ref để theo dõi ô nhập liệu đang được focus
+  const focusedSourceIdxRef = useRef<number | null>(null);
+
   const [results, setResults] = useState<ProductData[]>([]);
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [normalizationStatus, setNormalizationStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -125,7 +140,13 @@ const ScraperWorkspace: React.FC = () => {
   const [logs, setLogs] = useState<CrawlLog[]>([]);
   const [showHelp, setShowHelp] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showProjectManager, setShowProjectManager] = useState(false);
   
+  // Project & Saving State
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [savingProgress, setSavingProgress] = useState<{current: number, total: number} | null>(null);
+
   // Tracking & Filter State
   const [showTracking, setShowTracking] = useState(false);
   const [trackingData, setTrackingData] = useState<TrackingProduct[]>([]);
@@ -163,6 +184,41 @@ const ScraperWorkspace: React.FC = () => {
     }
   }, [logs]);
 
+  // Load Projects on Mount AND Restore Selected Project
+  useEffect(() => {
+      if (currentUser) {
+          refreshProjects();
+      }
+  }, [currentUser]);
+
+  // AUTO-SAVE: Khi người dùng chọn dự án, lưu ID vào localStorage
+  useEffect(() => {
+    if (currentProject) {
+        localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+    }
+  }, [currentProject]);
+
+  const refreshProjects = async () => {
+      if (!currentUser) return;
+      try {
+          const projs = await getUserProjects(currentUser.uid);
+          setProjects(projs);
+          
+          // RESTORE: Tìm lại dự án cũ từ localStorage
+          const savedId = localStorage.getItem(PROJECT_STORAGE_KEY);
+          const foundProj = projs.find(p => p.id === savedId);
+
+          if (foundProj) {
+              setCurrentProject(foundProj);
+          } else if (projs.length > 0 && !currentProject) {
+              // Nếu không tìm thấy (hoặc mới vào lần đầu), chọn dự án mới nhất
+              setCurrentProject(projs[0]);
+          }
+      } catch (e) {
+          console.error("Load project failed:", e);
+      }
+  };
+
   // -- EXTENSION LISTENER --
   useEffect(() => {
     const handleExtensionMessage = (event: MessageEvent) => {
@@ -181,19 +237,47 @@ const ScraperWorkspace: React.FC = () => {
 
          setSources(prev => {
             const next = [...prev];
-            let idx = next.findIndex(s => s.name.toUpperCase() === targetName);
-            if (idx === -1) {
-                idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+            let idx = -1;
+
+            // 1. ƯU TIÊN Ô ĐANG ĐƯỢC FOCUS (Nếu người dùng đang click vào input)
+            if (focusedSourceIdxRef.current !== null && focusedSourceIdxRef.current >= 0 && focusedSourceIdxRef.current < next.length) {
+                idx = focusedSourceIdxRef.current;
+                typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
+            } 
+            // 2. Nếu không focus, tìm theo tên sàn
+            else {
+                idx = next.findIndex(s => s.name.toUpperCase() === targetName);
+                // 3. Nếu không thấy tên sàn, tìm ô trống
+                if (idx === -1) {
+                    idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
+                }
+                // 4. Fallback về ô đầu tiên
+                if (idx === -1) idx = 0;
+                typeLog(`[AUTO-FILL] Auto Detect: Nhập vào ô số ${idx + 1} (${next[idx].name})`, 'matrix');
             }
-            if (idx === -1) idx = 0;
+            
+            // --- LOGIC APPEND (KHÔNG XÓA DỮ LIỆU CŨ) ---
+            const currentUrls = next[idx].urls || [];
+            // Chỉ thêm URL nếu chưa tồn tại
+            const newUrls = currentUrls.includes(url) 
+                ? currentUrls 
+                : [...currentUrls.filter(u => u.trim() !== ''), url];
+
+            const currentHtml = next[idx].htmlHint || "";
+            // Nối HTML mới vào sau HTML cũ (Dùng separator để dễ nhìn hoặc xử lý sau này)
+            // Lưu ý: Gemini có thể xử lý context lớn, việc nối chuỗi này giúp gom nhiều page.
+            const newHtml = currentHtml 
+                ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
+                : html;
 
             next[idx] = {
                 ...next[idx],
-                name: targetName || next[idx].name, 
-                htmlHint: html, 
-                urls: [url] 
+                name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName && idx !== focusedSourceIdxRef.current 
+                    ? targetName 
+                    : next[idx].name, 
+                htmlHint: newHtml, 
+                urls: newUrls 
             };
-            typeLog(`[AUTO-FILL] Đã điền dữ liệu vào ô nguồn số ${idx + 1} (${next[idx].name})`, 'matrix');
             return next;
          });
       }
@@ -203,32 +287,91 @@ const ScraperWorkspace: React.FC = () => {
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, []);
 
-  // -- HANDLERS --
+  // -- PROJECT HANDLERS --
+  const handleCreateProject = async () => {
+      const name = prompt("Nhập tên dự án mới:");
+      if (!name || !currentUser) return;
+      try {
+          const newProj = await createProject(currentUser.uid, name);
+          setProjects(prev => [newProj, ...prev]);
+          setCurrentProject(newProj);
+          typeLog(`[PROJECT] Đã tạo dự án: ${name}`, 'success');
+      } catch (e: any) {
+          console.error(e);
+          alert("Lỗi tạo dự án: " + e.message + "\n(Vui lòng kiểm tra Firestore Rules)");
+      }
+  };
+
+  const handleEditProject = async (proj: Project) => {
+      const newName = prompt("Đổi tên dự án:", proj.name);
+      if (newName && newName !== proj.name) {
+          try {
+              await updateProject(proj.id, newName);
+              // Update local state
+              setProjects(prev => prev.map(p => p.id === proj.id ? {...p, name: newName} : p));
+              if (currentProject?.id === proj.id) {
+                  setCurrentProject({...currentProject, name: newName});
+              }
+          } catch (e: any) {
+              alert("Lỗi cập nhật: " + e.message);
+          }
+      }
+  };
+
+  const handleDeleteProject = async (proj: Project) => {
+      if (confirm(`Bạn chắc chắn muốn xóa dự án "${proj.name}"?`)) {
+          try {
+              await deleteProject(proj.id);
+              // Update local state
+              const remaining = projects.filter(p => p.id !== proj.id);
+              setProjects(remaining);
+              // If deleted active project, select another one or null
+              if (currentProject?.id === proj.id) {
+                  const next = remaining.length > 0 ? remaining[0] : null;
+                  setCurrentProject(next);
+                  if(!next) localStorage.removeItem(PROJECT_STORAGE_KEY);
+              }
+          } catch (e: any) {
+               alert("Lỗi xóa: " + e.message);
+          }
+      }
+  };
+
   const handleSyncToCloud = async () => {
     if (!currentUser || results.length === 0) return;
-    const rawItems = results.filter(r => r.plCombo === 'Raw');
-    if (rawItems.length > 0) {
-        if(!confirm(`Có ${rawItems.length} sản phẩm chưa được chuẩn hóa tên (Giai đoạn 2). Dữ liệu lịch sử có thể bị phân tán. Bạn có muốn tiếp tục lưu không?`)) return;
+    if (!currentProject) {
+        alert("Vui lòng chọn hoặc tạo DỰ ÁN trước khi lưu!");
+        return;
     }
-    try {
-        setNormalizationStatus(AppStatus.PROCESSING);
-        typeLog(`[CLOUD] Đang đẩy ${results.length} sản phẩm lên Firebase...`, 'system');
-        await saveScrapedDataToFirestore(currentUser.uid, results, sources);
-        typeLog(`[CLOUD] Đã lưu thành công! Chuyển qua tab Theo Dõi Giá để xem lịch sử.`, 'success');
-        alert("Đã lưu dữ liệu vào Cloud thành công!");
-    } catch (error: any) {
+    
+    // Non-blocking save initiation
+    setSavingProgress({ current: 0, total: results.length });
+    typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
+
+    // Async execution
+    saveScrapedDataToFirestore(
+        currentUser.uid, 
+        currentProject.id, 
+        results, 
+        sources,
+        (current, total) => {
+             setSavingProgress({ current, total });
+        }
+    ).then(() => {
+        typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
+        setSavingProgress(null);
+        refreshProjects(); // Update project stats
+    }).catch((error: any) => {
         typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
-        console.error(error);
-    } finally {
-        setNormalizationStatus(AppStatus.IDLE);
-    }
+        setSavingProgress(null);
+    });
   };
 
   const loadTrackingData = async () => {
       if (!currentUser) return;
       setIsLoadingTracking(true);
       try {
-          const data = await getTrackedProducts(currentUser.uid);
+          const data = await getTrackedProducts(currentUser.uid, currentProject?.id);
           setTrackingData(data);
       } catch (error) {
           console.error("Failed to load tracking data", error);
@@ -254,6 +397,10 @@ const ScraperWorkspace: React.FC = () => {
     const activeTasks = sources.flatMap((src, srcIdx) => {
       const validUrls = src.urls.filter(u => u.trim().length > 0);
       if (validUrls.length > 0) {
+        // --- LOGIC MỚI: Xử lý nhiều URL cho 1 Source ---
+        // Vì HTML hint hiện tại đang bị gộp chung (concatenated), ta cần cách xử lý thông minh hơn.
+        // Hiện tại: Gửi toàn bộ cục HTML Hints khổng lồ cho mỗi URL. 
+        // Gemini sẽ tự lọc sản phẩm trong HTML khớp với context.
         return validUrls.map(url => ({ src, srcIdx, url, html: src.htmlHint }));
       }
       if (src.htmlHint.trim().length > 50) {
@@ -273,7 +420,7 @@ const ScraperWorkspace: React.FC = () => {
     
     let completed = 0;
     for (const task of activeTasks) {
-      typeLog(`[START] ${task.src.name} -> Bóc tách thô...`, 'info');
+      typeLog(`[START] ${task.src.name} -> Bóc tách thô (Link: ${task.url.substring(0, 30)}...)...`, 'info');
       try {
         const rawItems = await parseRawProducts(task.url, task.html, task.srcIdx + 1);
         if (rawItems.length > 0) {
@@ -430,7 +577,85 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* GLOBAL LOADING OVERLAY */}
+      {/* SAVING PROGRESS TOAST (Fixed Bottom Right) */}
+      {savingProgress && (
+          <div className="fixed bottom-6 right-6 z-[1000] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300">
+              <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                      <div className="relative">
+                          <div className="absolute inset-0 bg-indigo-500 rounded-full animate-ping opacity-20"></div>
+                          <div className="relative bg-indigo-50 text-indigo-600 p-2 rounded-full">
+                              <UploadCloud className="w-5 h-5" />
+                          </div>
+                      </div>
+                      <div>
+                          <h4 className="text-sm font-black text-slate-800">Đang đồng bộ...</h4>
+                          <p className="text-[10px] text-slate-500 font-bold">Dự án: {currentProject?.name}</p>
+                      </div>
+                  </div>
+                  <Loader2 className="w-4 h-4 text-slate-300 animate-spin" />
+              </div>
+              
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden mb-2">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-300 ease-out"
+                    style={{width: `${(savingProgress.current / savingProgress.total) * 100}%`}}
+                  ></div>
+              </div>
+              <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                  <span>Tiến độ</span>
+                  <span>{savingProgress.current} / {savingProgress.total}</span>
+              </div>
+          </div>
+      )}
+
+      {/* PROJECT MANAGER MODAL */}
+      {showProjectManager && (
+          <div className="fixed inset-0 bg-black/60 z-[1002] flex items-center justify-center p-4 backdrop-blur-sm animate-in zoom-in duration-300">
+              <div className="bg-white rounded-[2rem] p-8 max-w-2xl w-full shadow-2xl overflow-hidden relative">
+                  <div className="flex justify-between items-center mb-6">
+                      <div className="flex items-center gap-3">
+                          <div className="bg-indigo-100 p-3 rounded-xl">
+                              <FolderOpen className="w-6 h-6 text-indigo-600" />
+                          </div>
+                          <div>
+                              <h3 className="text-xl font-black uppercase text-slate-800">Quản Lý Dự Án</h3>
+                              <p className="text-xs text-slate-500 font-bold">Danh sách các dự án đã tạo</p>
+                          </div>
+                      </div>
+                      <button onClick={() => setShowProjectManager(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X className="w-5 h-5 text-slate-400" /></button>
+                  </div>
+
+                  <div className="max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 space-y-3 mb-6">
+                      {projects.map(p => (
+                          <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border ${currentProject?.id === p.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100 bg-slate-50'}`}>
+                              <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => { setCurrentProject(p); setShowProjectManager(false); }}>
+                                  <div className={`w-3 h-3 rounded-full ${currentProject?.id === p.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
+                                  <div>
+                                      <h4 className={`text-sm font-black hover:underline ${currentProject?.id === p.id ? 'text-indigo-700' : 'text-slate-700'}`}>{p.name}</h4>
+                                      <p className="text-[10px] text-slate-400">{new Date(p.createdAt).toLocaleDateString('vi-VN')} • {p.productCount || 0} sản phẩm</p>
+                                  </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                  <button onClick={(e) => { e.stopPropagation(); handleEditProject(p); }} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"><Edit2 className="w-4 h-4" /></button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteProject(p); }} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-slate-100 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
+                              </div>
+                          </div>
+                      ))}
+                      {projects.length === 0 && <div className="text-center text-slate-400 py-10 text-sm">Chưa có dự án nào</div>}
+                  </div>
+
+                  <button 
+                      onClick={handleCreateProject}
+                      className="w-full py-4 bg-slate-900 text-white rounded-xl font-black uppercase tracking-widest text-xs hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                  >
+                      <Plus className="w-4 h-4" /> Tạo Dự Án Mới
+                  </button>
+              </div>
+          </div>
+      )}
+
+      {/* GLOBAL LOADING OVERLAY (Only for Normalization) */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -438,12 +663,12 @@ const ScraperWorkspace: React.FC = () => {
                  <div className="absolute inset-0 border-8 border-indigo-100 rounded-full"></div>
                  <div className="absolute inset-0 border-8 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
                  <div className="absolute inset-0 flex items-center justify-center">
-                    <UploadCloud className="w-12 h-12 text-indigo-600 animate-bounce" />
+                    <BrainCircuit className="w-12 h-12 text-indigo-600 animate-pulse" />
                  </div>
               </div>
               <div>
-                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang đồng bộ...</h3>
-                 <p className="text-slate-500 font-bold mt-2">Dữ liệu đang được đẩy lên Firebase</p>
+                 <h3 className="text-2xl font-black uppercase text-indigo-900 tracking-tight">Đang tối ưu hóa...</h3>
+                 <p className="text-slate-500 font-bold mt-2">AI đang phân tích và chuẩn hóa dữ liệu</p>
               </div>
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto overflow-hidden">
                    <div className="h-full bg-indigo-600 animate-progress"></div>
@@ -517,18 +742,29 @@ const ScraperWorkspace: React.FC = () => {
             </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-1">Dual Stage: Raw Extraction &rarr; Normalization</p>
+              <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
+                      <FolderOpen className="w-3 h-3" />
+                      {currentProject ? currentProject.name : "Chưa chọn dự án"}
+                  </div>
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
              {currentUser && (
-               <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100">
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
-                      <User className="w-4 h-4 text-indigo-600" />
+               <div 
+                 onClick={() => { refreshProjects(); setShowProjectManager(true); }}
+                 className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl mr-4 border border-slate-100 cursor-pointer hover:bg-indigo-50 hover:border-indigo-100 transition-all group"
+               >
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-500 transition-colors">
+                      <User className="w-4 h-4 text-indigo-600 group-hover:text-white" />
                   </div>
                   <div className="flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase">Xin chào</span>
-                      <span className="text-xs font-black text-slate-800 max-w-[100px] truncate">{currentUser.email}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-800 max-w-[100px] truncate">{currentUser.email}</span>
+                        <Settings className="w-3 h-3 text-slate-300 group-hover:text-indigo-500" />
+                      </div>
                   </div>
                </div>
              )}
@@ -561,7 +797,8 @@ const ScraperWorkspace: React.FC = () => {
                   key={idx} 
                   index={idx} 
                   source={src} 
-                  onUpdate={updateSource} 
+                  onUpdate={updateSource}
+                  onFocusInput={(i) => focusedSourceIdxRef.current = i}
                 />
               ))}
             </div>
@@ -630,16 +867,22 @@ const ScraperWorkspace: React.FC = () => {
                   onClick={() => setViewMode('table')}
                   className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${viewMode === 'table' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
                 >
-                  <Table2 className="w-4 h-4" /> Dữ liệu chi tiết
+                  <Table2 className="w-4 h-4" /> Chi tiết
+                </button>
+                <button 
+                  onClick={() => setViewMode('dashboard')}
+                  className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${viewMode === 'dashboard' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  <LayoutGrid className="w-4 h-4" /> Phân Tích
                 </button>
                 <button 
                   onClick={() => {
-                      loadTrackingData(); // Tải dữ liệu từ Firebase
-                      setShowTracking(true); // Mở dashboard
+                      loadTrackingData(); 
+                      setShowTracking(true);
                   }}
                   className={`px-6 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest flex items-center gap-2 transition-all ${showTracking ? 'bg-white shadow-md text-indigo-600' : 'text-slate-400 hover:text-slate-600 hover:bg-white/50'}`}
                 >
-                  <TrendingUp className="w-4 h-4" /> Theo Dõi Giá (Cloud)
+                  <TrendingUp className="w-4 h-4" /> Theo Dõi Giá
                 </button>
               </div>
             </div>
@@ -647,11 +890,11 @@ const ScraperWorkspace: React.FC = () => {
             <div className="flex items-center gap-3">
                <button 
                   onClick={handleSyncToCloud}
-                  disabled={results.length === 0}
+                  disabled={results.length === 0 || savingProgress !== null}
                   className="flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:shadow-none"
                >
                    <UploadCloud className="w-4 h-4"/>
-                   Lưu vào Firebase
+                   {savingProgress ? 'Đang lưu...' : 'Lưu vào Firebase'}
                </button>
 
                <div className="h-8 w-px bg-slate-200 mx-2"></div>
