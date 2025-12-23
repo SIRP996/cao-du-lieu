@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { TrackingProduct } from '../types';
+import { TrackingProduct, TrackingSourceData } from '../types';
 import { 
   TrendingUp, TrendingDown, Clock, ExternalLink, 
   Search, RefreshCw, ArrowLeft, Play, Pause, Activity, Zap, Layers, AlertCircle, Loader2, Minus
@@ -284,8 +283,8 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                 </thead>
                 <tbody className="divide-y divide-slate-700/50 text-sm">
                     {filteredData.map((product) => {
-                        const totalChanges = Object.values(product.sources).reduce((acc: number, src: any) => {
-                            const uniquePrices = new Set(src.history.map((h: any) => h.avgPrice || h.price));
+                        const totalChanges = (Object.values(product.sources) as TrackingSourceData[]).reduce((acc, src) => {
+                            const uniquePrices = new Set((src.history || []).map((h: any) => h.avgPrice || h.price));
                             return acc + (uniquePrices.size - 1 > 0 ? uniquePrices.size - 1 : 0);
                         }, 0);
 

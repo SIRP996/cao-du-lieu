@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Download, Play, Loader2, Code, 
-  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, CloudLightning
+  Package, ExternalLink, Search, Table2, LayoutGrid, Filter, SlidersHorizontal, Sparkles, Database, PieChart, TrendingUp, CheckCircle2, AlertCircle, X, Copy, Cpu, Zap, BrainCircuit, Wand2, PartyPopper, Radio, Laptop, Tag, LogOut, UploadCloud, User, Layers, FolderPlus, FolderOpen, ChevronDown, Check, Edit2, Trash2, Plus, Settings, CloudLightning, CheckCheck
 } from 'lucide-react';
 import { ProductData, AppStatus, SourceConfig, TrackingProduct, Project } from './types';
 import { parseRawProducts, processNormalization } from './services/geminiScraper';
@@ -17,7 +17,7 @@ import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, create
 // Bỏ Storage Key Local cũ để dùng Cloud hoàn toàn
 const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
 
-// --- COMPONENT NHẬP LIỆU (OPTIMIZED) ---
+// --- COMPONENT NHẬP LIỆU (OPTIMIZED UI) ---
 const SourceInputCard = memo(({ 
   source, 
   index, 
@@ -33,19 +33,28 @@ const SourceInputCard = memo(({
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
   const isShopee = source.name.toUpperCase().includes('SHOPEE');
 
+  // Logic hiển thị HTML rút gọn để tránh lag UI
+  const displayHtml = useMemo(() => {
+      if (!source.htmlHint) return '';
+      if (source.htmlHint.length > 1000) {
+          return source.htmlHint.substring(0, 1000) + `\n... [ĐÃ ẨN ${source.htmlHint.length - 1000} KÝ TỰ ĐỂ TỐI ƯU HIỆU SUẤT] ...`;
+      }
+      return source.htmlHint;
+  }, [source.htmlHint]);
+
+  // Chỉ update ref khi giá trị thực sự thay đổi từ bên ngoài
   useEffect(() => {
-    if (htmlInputRef.current && htmlInputRef.current.value !== source.htmlHint) {
-        htmlInputRef.current.value = source.htmlHint;
-    }
+    // Không update htmlInputRef trực tiếp với chuỗi full html để tránh crash
+    // Chỉ update nếu user gõ tay (nhỏ)
     if (urlsInputRef.current && urlsInputRef.current.value !== source.urls.join('\n')) {
         urlsInputRef.current.value = source.urls.join('\n');
     }
-  }, [source.htmlHint, source.urls]);
+  }, [source.urls]);
 
   return (
-    <div className={`bg-white p-6 rounded-[2.5rem] border shadow-sm transition-all group ${source.urls.length > 1 || (source.urls[0] && source.urls[0] !== '') ? 'border-emerald-400 shadow-emerald-100 ring-4 ring-emerald-50' : 'border-slate-200 hover:border-indigo-200'}`}>
+    <div className={`bg-white p-6 rounded-[2.5rem] border shadow-sm transition-all group ${source.htmlHint ? 'border-emerald-400 shadow-emerald-100 ring-4 ring-emerald-50' : 'border-slate-200 hover:border-indigo-200'}`}>
       <div className="flex items-center gap-4 mb-5 border-b border-slate-50 pb-4">
-        <div className={`w-10 h-10 flex items-center justify-center rounded-2xl font-black text-xs transition-all ${source.urls.length > 1 || (source.urls[0] && source.urls[0] !== '') ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white'}`}>
+        <div className={`w-10 h-10 flex items-center justify-center rounded-2xl font-black text-xs transition-all ${source.htmlHint ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-300 group-hover:bg-indigo-600 group-hover:text-white'}`}>
           {index + 1}
         </div>
         <div className="flex-1">
@@ -75,7 +84,7 @@ const SourceInputCard = memo(({
           </div>
         )}
 
-        {(source.urls.length > 0 && source.urls[0] !== '') && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã có {source.urls.filter(u=>u).length} link</span>}
+        {source.htmlHint && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-600 px-2 py-1 rounded-lg animate-pulse whitespace-nowrap">Đã có dữ liệu HTML</span>}
       </div>
       <div className="space-y-4">
         <textarea 
@@ -88,19 +97,20 @@ const SourceInputCard = memo(({
         />
         <div className="relative">
             <textarea 
-              ref={htmlInputRef}
-              defaultValue={source.htmlHint}
+              // Dùng value thay vì defaultValue để control hiển thị rút gọn
+              value={displayHtml}
+              // Khi user paste tay, vẫn cho phép update
+              onChange={(e) => onUpdate(index, 'htmlHint', e.target.value)} 
               onFocus={() => onFocusInput(index)}
-              onBlur={(e) => onUpdate(index, 'htmlHint', e.target.value)}
-              placeholder="Paste HTML (Thủ công) - Hệ thống sẽ tự động lưu lên Cloud..."
-              className="w-full p-5 h-20 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600 truncate"
+              placeholder="Paste HTML Code (Body) vào đây..."
+              className="w-full p-5 h-40 bg-slate-50 border border-slate-100 rounded-3xl text-[10px] outline-none focus:ring-4 focus:ring-indigo-500/5 font-mono resize-none transition-all pr-10 text-slate-600"
             />
             <div className="absolute right-4 top-4 text-slate-300 group-hover:text-indigo-300 pointer-events-none">
                 <Code className="w-4 h-4" />
             </div>
             <div className="absolute bottom-4 right-4 pointer-events-none">
               <span className="text-[9px] font-bold text-slate-300 bg-white/80 px-2 py-1 rounded-lg backdrop-blur-sm">
-                 HTML MANUAL (Auto-Sync)
+                 HTML INPUT
               </span>
             </div>
         </div>
@@ -149,6 +159,7 @@ const ScraperWorkspace: React.FC = () => {
   
   // Cloud Sync Status
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const syncTimeoutRef = useRef<any>(null);
 
   // Tracking & Filter State
@@ -201,6 +212,7 @@ const ScraperWorkspace: React.FC = () => {
             
             // Lưu lại ID dự án active
             localStorage.setItem(PROJECT_STORAGE_KEY, currentProject.id);
+            setLastSyncTime(new Date());
 
         } catch (e) {
             console.error("Load cloud data failed:", e);
@@ -225,6 +237,7 @@ const ScraperWorkspace: React.FC = () => {
       syncTimeoutRef.current = setTimeout(async () => {
           try {
               await syncProjectWorkspace(currentProject.id, sources, results);
+              setLastSyncTime(new Date());
               // Chỉ tắt trạng thái syncing sau khi lưu xong
               setIsCloudSyncing(false);
           } catch (e) {
@@ -290,10 +303,11 @@ const ScraperWorkspace: React.FC = () => {
              if (idx === -1) idx = 0;
          }
 
-         typeLog(`[PROCESSING] Đang xử lý trực tiếp dữ liệu từ Extension vào Nguồn ${idx + 1}...`, 'matrix');
+         typeLog(`[PROCESSING] Đang xử lý dữ liệu (Extension đã tối ưu) vào Nguồn ${idx + 1}...`, 'matrix');
 
          // 2. XỬ LÝ NGAY LẬP TỨC
          try {
+             // Hàm này sẽ dùng Gemini phân tích html đã được extension làm sạch
              const rawItems = await parseRawProducts(url, html, idx + 1);
              
              if (rawItems.length > 0) {
@@ -308,10 +322,6 @@ const ScraperWorkspace: React.FC = () => {
                  typeLog(`[SUCCESS] Đã thêm ${rawItems.length} sản phẩm từ Extension.`, 'success');
 
                  // Update URL vào Source Config
-                 // Lưu ý: Ta KHÔNG lưu HTML vào state ở đây để tránh lag UI ngay lập tức.
-                 // Nhưng nếu user muốn "Lưu 1:1", ta có thể lưu.
-                 // Tuy nhiên Extension gửi HTML rất nặng, ta nên để cơ chế Auto-Sync xử lý (lưu url).
-                 // Nếu cần HTML để re-crawl sau này, ta nên cân nhắc kỹ. Ở đây ta chỉ lưu URL.
                  setSources(prev => {
                     const next = [...prev];
                     const currentUrls = next[idx].urls || [];
@@ -325,8 +335,9 @@ const ScraperWorkspace: React.FC = () => {
                             ? targetName 
                             : next[idx].name,
                         urls: newUrls,
-                        // KHÔNG set htmlHint từ Extension vì nó quá nặng (2MB+) gây crash React
-                        // htmlHint: html 
+                        // Quan trọng: Lưu HTML đã clean vào đây để dùng cho các mục đích tái xử lý sau này
+                        // Nhưng Component SourceInputCard đã có logic rút gọn hiển thị nên không sợ lag.
+                        htmlHint: html 
                     };
                     return next;
                  });
@@ -801,16 +812,24 @@ const ScraperWorkspace: React.FC = () => {
             </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex items-center gap-4 mt-2">
                   <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
                       <FolderOpen className="w-3 h-3" />
                       {currentProject ? currentProject.name : "Chưa chọn dự án"}
                   </div>
-                  {isCloudSyncing && (
-                      <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded-lg animate-pulse">
-                          <CloudLightning className="w-3 h-3" /> Saving...
-                      </div>
-                  )}
+                  
+                  {/* CLOUD SYNC STATUS INDICATOR (NEW) */}
+                  <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg transition-all duration-300 ${isCloudSyncing ? 'bg-indigo-50 text-indigo-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                      {isCloudSyncing ? (
+                          <>
+                            <CloudLightning className="w-3 h-3 animate-pulse" /> Đang lưu...
+                          </>
+                      ) : (
+                          <>
+                            <CheckCheck className="w-3 h-3" /> Đã đồng bộ {lastSyncTime ? `(${lastSyncTime.toLocaleTimeString()})` : ''}
+                          </>
+                      )}
+                  </div>
               </div>
             </div>
           </div>
