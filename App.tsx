@@ -12,7 +12,16 @@ import { exportToMultiSheetExcel } from './utils/excelExport';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import PriceTrackingDashboard from './components/PriceTrackingDashboard';
-import { saveScrapedDataToFirestore, getTrackedProducts, getUserProjects, createProject, updateProject, deleteProject } from './services/firebaseService';
+import { 
+    saveScrapedDataToFirestore, 
+    getTrackedProducts, 
+    getUserProjects, 
+    createProject, 
+    updateProject, 
+    deleteProject,
+    syncProjectWorkspace, // Import thêm
+    getProjectWorkspace   // Import thêm
+} from './services/firebaseService';
 
 const STORAGE_KEY = 'super_scraper_v22_standard_names';
 const PROJECT_STORAGE_KEY = 'super_scraper_last_active_project_id';
@@ -178,7 +187,6 @@ const ScraperWorkspace: React.FC = () => {
         setUserApiKey(savedKey);
     } else {
         // Nếu không có Key trong LocalStorage, bật modal lên
-        // Delay 1s để UI render xong đẹp
         setTimeout(() => setShowApiKeyModal(true), 800);
     }
 
@@ -224,12 +232,44 @@ const ScraperWorkspace: React.FC = () => {
 
           if (foundProj) {
               setCurrentProject(foundProj);
+              // Lưu ý: Ta không tự động load data ở đây để tránh ghi đè dữ liệu LocalStorage đang làm dở
+              // Dữ liệu chỉ load khi bấm chọn trong Project Manager
           } else if (projs.length > 0 && !currentProject) {
-              // Nếu không tìm thấy (hoặc mới vào lần đầu), chọn dự án mới nhất
               setCurrentProject(projs[0]);
           }
       } catch (e) {
           console.error("Load project failed:", e);
+      }
+  };
+
+  // --- NEW: HANDLE SELECT PROJECT AND LOAD DATA ---
+  const handleSelectProject = async (proj: Project) => {
+      setCurrentProject(proj);
+      setShowProjectManager(false);
+      
+      // Nếu có dữ liệu đang làm dở, hỏi user có muốn lưu đè hay tải mới
+      if (results.length > 0 && !confirm("Bạn có chắc muốn tải dự án mới? Dữ liệu chưa lưu hiện tại sẽ bị thay thế.")) {
+          return;
+      }
+
+      typeLog(`[PROJECT] Đang tải dữ liệu dự án: ${proj.name}...`, 'system');
+      try {
+          const workspace = await getProjectWorkspace(proj.id);
+          
+          if (workspace.sources && workspace.sources.length > 0) {
+              setSources(workspace.sources);
+              typeLog(`[PROJECT] Đã khôi phục cấu hình nguồn (HTML/URL).`, 'success');
+          }
+          
+          if (workspace.results && workspace.results.length > 0) {
+              setResults(workspace.results);
+              typeLog(`[PROJECT] Đã khôi phục ${workspace.results.length} sản phẩm.`, 'success');
+          } else {
+              setResults([]);
+              typeLog(`[PROJECT] Dự án chưa có dữ liệu kết quả.`, 'info');
+          }
+      } catch (e: any) {
+          typeLog(`[PROJECT ERR] Lỗi tải dữ liệu: ${e.message}`, 'error');
       }
   };
 
@@ -294,8 +334,6 @@ const ScraperWorkspace: React.FC = () => {
   }, []);
 
   const handleSaveApiKey = () => {
-    // Logic mới: Không validate length < 10 nữa vì có thể user đang xóa key
-    // Chỉ cần trim và làm sạch
     const cleaned = userApiKey.trim();
     if (cleaned.length === 0) {
         if(confirm("Bạn muốn xóa toàn bộ Key và dùng mặc định?")) {
@@ -307,21 +345,18 @@ const ScraperWorkspace: React.FC = () => {
         return;
     }
 
-    // Tách key để kiểm tra (dấu phẩy hoặc xuống dòng)
     const keys = cleaned.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
     if (keys.length === 0) {
         alert("Không tìm thấy Key hợp lệ nào (Key phải dài hơn 10 ký tự).");
         return;
     }
 
-    // Lưu chuỗi chuẩn hóa (nối bằng dấu phẩy)
     const savedString = keys.join(',');
     localStorage.setItem(API_KEY_STORAGE, savedString);
     setShowApiKeyModal(false);
     alert(`Đã lưu ${keys.length} API Key! Hệ thống sẽ tự động xoay vòng key.`);
   };
 
-  // Đếm số key đang nhập
   const detectedKeysCount = useMemo(() => {
       if (!userApiKey) return 0;
       return userApiKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10).length;
@@ -335,10 +370,17 @@ const ScraperWorkspace: React.FC = () => {
           const newProj = await createProject(currentUser.uid, name);
           setProjects(prev => [newProj, ...prev]);
           setCurrentProject(newProj);
+          // Khi tạo mới, reset workspace
+          setSources(Array(5).fill(null).map((_, i) => {
+              const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
+              return { name: names[i], urls: [''], htmlHint: '' };
+          }));
+          setResults([]);
+          setShowProjectManager(false);
           typeLog(`[PROJECT] Đã tạo dự án: ${name}`, 'success');
       } catch (e: any) {
           console.error(e);
-          alert("Lỗi tạo dự án: " + e.message + "\n(Vui lòng kiểm tra Firestore Rules)");
+          alert("Lỗi tạo dự án: " + e.message);
       }
   };
 
@@ -374,6 +416,7 @@ const ScraperWorkspace: React.FC = () => {
       }
   };
 
+  // --- MODIFIED: SYNC ALL WORKSPACE DATA ---
   const handleSyncToCloud = async () => {
     if (!currentUser || results.length === 0) return;
     if (!currentProject) {
@@ -382,24 +425,32 @@ const ScraperWorkspace: React.FC = () => {
     }
     
     setSavingProgress({ current: 0, total: results.length });
-    typeLog(`[CLOUD] Bắt đầu lưu ${results.length} sản phẩm vào dự án: ${currentProject.name}...`, 'system');
+    
+    try {
+        // 1. Lưu sản phẩm vào Tracking (Giữ nguyên logic cũ)
+        typeLog(`[CLOUD] Đang lưu ${results.length} sản phẩm vào Theo dõi giá...`, 'system');
+        await saveScrapedDataToFirestore(
+            currentUser.uid, 
+            currentProject.id, 
+            results, 
+            sources,
+            (current, total) => {
+                 setSavingProgress({ current, total });
+            }
+        );
 
-    saveScrapedDataToFirestore(
-        currentUser.uid, 
-        currentProject.id, 
-        results, 
-        sources,
-        (current, total) => {
-             setSavingProgress({ current, total });
-        }
-    ).then(() => {
-        typeLog(`[CLOUD] Đã lưu hoàn tất!`, 'success');
-        setSavingProgress(null);
+        // 2. [MỚI] Lưu trạng thái Workspace (HTML + URLs)
+        typeLog(`[CLOUD] Đang đồng bộ trạng thái làm việc (HTML & Config)...`, 'system');
+        await syncProjectWorkspace(currentProject.id, sources, results);
+
+        typeLog(`[CLOUD] Đã lưu hoàn tất toàn bộ dữ liệu!`, 'success');
         refreshProjects(); 
-    }).catch((error: any) => {
+
+    } catch (error: any) {
         typeLog(`[CLOUD ERR] Lỗi lưu trữ: ${error.message}`, 'error');
+    } finally {
         setSavingProgress(null);
-    });
+    }
   };
 
   const loadTrackingData = async () => {
@@ -467,7 +518,6 @@ const ScraperWorkspace: React.FC = () => {
         }
       } catch (err: any) {
         const msg = String(err.message || err);
-        // Bắt lỗi MISSING_API_KEY để bật modal
         if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid") || msg.includes("400")) {
              typeLog(`[CRITICAL] Lỗi Key: ${msg}`, 'error');
              setShowApiKeyModal(true); 
@@ -505,6 +555,7 @@ const ScraperWorkspace: React.FC = () => {
     setNormalizationStatus(AppStatus.COMPLETED);
   };
 
+  // ... (Calculations logic omitted for brevity, same as before) ...
   // -- CALCULATIONS --
   const groupedResults = useMemo(() => {
     const groups: Record<string, any> = {};
@@ -606,7 +657,6 @@ const ScraperWorkspace: React.FC = () => {
     return { totalRaw, totalGroups, avgGap, topCat, sortedCats, topGaps, sourceStats };
   }, [results, sources]);
 
-  // -- TRACKING MODE RENDER --
   if (showTracking) {
       return (
           <PriceTrackingDashboard 
@@ -622,7 +672,7 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* API KEY MODAL (CÀI ĐẶT) - Z-INDEX 10000 ĐỂ HIỆN TRÊN CÙNG */}
+      {/* API KEY MODAL (CÀI ĐẶT) */}
       {showApiKeyModal && (
         <div className="fixed inset-0 bg-slate-900/90 z-[10000] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
            <div className="bg-[#1e293b] rounded-[2rem] p-8 max-w-lg w-full shadow-2xl border border-slate-700 relative overflow-hidden">
@@ -734,7 +784,7 @@ const ScraperWorkspace: React.FC = () => {
                   <div className="max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 space-y-3 mb-6">
                       {projects.map(p => (
                           <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border ${currentProject?.id === p.id ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100 bg-slate-50'}`}>
-                              <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => { setCurrentProject(p); setShowProjectManager(false); }}>
+                              <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => handleSelectProject(p)}>
                                   <div className={`w-3 h-3 rounded-full ${currentProject?.id === p.id ? 'bg-indigo-500' : 'bg-slate-300'}`}></div>
                                   <div>
                                       <h4 className={`text-sm font-black hover:underline ${currentProject?.id === p.id ? 'text-indigo-700' : 'text-slate-700'}`}>{p.name}</h4>
@@ -760,7 +810,7 @@ const ScraperWorkspace: React.FC = () => {
           </div>
       )}
 
-      {/* GLOBAL LOADING OVERLAY (Only for Normalization) */}
+      {/* GLOBAL LOADING OVERLAY */}
       {normalizationStatus === AppStatus.PROCESSING && (
         <div className="fixed inset-0 bg-white/90 z-[1000] flex flex-col items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
            <div className="w-full max-w-md text-center space-y-8">
@@ -837,6 +887,7 @@ const ScraperWorkspace: React.FC = () => {
         </div>
       )}
 
+      {/* Main Content Layout */}
       <div className="max-w-[1700px] mx-auto p-4 md:p-8 space-y-8">
         
         {/* Header Section */}

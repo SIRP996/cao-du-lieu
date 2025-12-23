@@ -151,15 +151,62 @@ const OFFICIAL_NAMES = [
 // --- HELPERS ---
 const slugify = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
+// --- NEW OPTIMIZED HTML CLEANER (RESOURCE SAVER) ---
 const preProcessHtml = (rawHtml: string): string => {
   if (!rawHtml) return "";
-  let fastClean = rawHtml.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gim, "").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gim, "").replace(/<!--[\s\S]*?-->/g, "");
+  
+  // 1. Cắt bớt phần thừa thãi (Script, Style, SVG, Comment)
+  let clean = rawHtml
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gim, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gim, "")
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gim, "") // SVG rất tốn token
+    .replace(/<!--[\s\S]*?-->/g, "");
+
   try {
     const parser = new DOMParser();
-    const doc = parser.parseFromString(fastClean, 'text/html');
-    ['iframe', 'noscript', 'meta', 'link', 'head', 'footer', 'header', 'nav', 'form', 'button', 'input'].forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
-    return doc.body.innerHTML;
-  } catch (e) { return fastClean; }
+    const doc = parser.parseFromString(clean, 'text/html');
+    
+    // 2. Xóa các thẻ không chứa thông tin sản phẩm
+    const trashTags = ['iframe', 'noscript', 'meta', 'link', 'head', 'footer', 'header', 'nav', 'form', 'button', 'input', 'select', 'option'];
+    trashTags.forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
+
+    // 3. Xóa các class/id thường chứa "Sản phẩm tương tự" hoặc "Gợi ý" để tránh cào nhầm
+    // Hasaki/Shopee specific blacklist
+    const blacklistSelectors = [
+        '[class*="recommend"]', '[id*="recommend"]', 
+        '[class*="suggestion"]', '[id*="suggestion"]',
+        '.footer', '#footer', '.header', '#header'
+    ];
+    blacklistSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(el => el.remove()));
+
+    // 4. SIÊU NÉN: Loại bỏ TẤT CẢ attributes trừ href và src
+    // Giúp giảm 60% dung lượng token mà vẫn giữ được cấu trúc và link/ảnh
+    const allElements = doc.body.getElementsByTagName("*");
+    for (let i = 0; i < allElements.length; i++) {
+        const el = allElements[i];
+        const keepAttrs = ['href', 'src']; // Chỉ giữ lại link và ảnh
+        
+        // Convert to array to avoid iterator issues while removing
+        const attrsToRemove = [];
+        for (let j = 0; j < el.attributes.length; j++) {
+            const attrName = el.attributes[j].name;
+            if (!keepAttrs.includes(attrName)) {
+                attrsToRemove.push(attrName);
+            }
+        }
+        
+        attrsToRemove.forEach(attr => el.removeAttribute(attr));
+        
+        // Xóa ảnh base64 dài ngoằng (tiết kiệm token cực lớn)
+        if (el.hasAttribute('src') && el.getAttribute('src')?.startsWith('data:image')) {
+            el.removeAttribute('src');
+        }
+    }
+
+    return doc.body.innerHTML.replace(/\s\s+/g, ' '); // Xóa khoảng trắng thừa
+  } catch (e) { 
+      return clean.substring(0, 100000); // Fallback
+  }
 };
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -309,24 +356,35 @@ export const parseRawProducts = async (
   sourceIndex: number
 ): Promise<Partial<ProductData>[]> => {
   const model = "gemini-3-flash-preview";
+  // Sử dụng hàm nén HTML mới siêu mạnh
   const cleanHtmlInput = preProcessHtml(htmlHint);
+  
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
 
   let retries = 0;
-  const maxRetries = 15; // Tăng số lần thử vì có cơ chế đổi key
+  const maxRetries = 15;
   let currentDelay = 2000;
+
+  // Giới hạn độ dài input xuống còn 200k ký tự sau khi đã nén để tránh lỗi Context quá lớn
+  const safeHtml = cleanHtmlInput.substring(0, 200000);
 
   while (retries < maxRetries) {
     try {
       const ai = getAIClient();
       const prompt = `
-        EXTRACT PRODUCTS FROM HTML.
-        Target: Main product list (search results). 
-        IGNORE: Recommendations, 'Similar Products', 'Top Products', Footer items.
+        TASK: Extract MAIN PRODUCT LIST from HTML.
+        
+        CRITICAL RULES:
+        1. ONLY extract products from the MAIN GRID/LIST.
+        2. IGNORE "Recommended", "Suggestions", "Similar Products", "Seen Recently" (Gợi ý, Tương tự, Đã xem).
+        3. IGNORE Footer items or Sidebar promotions.
+        4. Focus on elements containing Image + Title + Price.
+        
+        Input URL: ${url}
         
         Return JSON Array: [{sanPham, gia, productUrl}]
         
-        HTML: ${cleanHtmlInput.substring(0, 500000)}
+        HTML (Simplified): ${safeHtml}
       `;
       
       const response = await ai.models.generateContent({
@@ -383,14 +441,12 @@ export const parseRawProducts = async (
              await delay(1000); 
              continue;
         } else {
-             // Hết key để đổi -> Ném lỗi để UI hiện Popup nhập key
              throw new Error("MISSING_API_KEY");
         }
       } else {
          console.error("Gemini Error:", error);
          retries++;
          await delay(currentDelay);
-         // currentDelay *= 1.5; // Exponential backoff (Optional)
       }
     }
   }
@@ -449,8 +505,6 @@ export const processNormalization = async (
         await delay(500); 
       } catch (e: any) {
         console.error("Batch error", e);
-        // Nếu lỗi Key thì sẽ được catch bên trong normalizeBatchWithAI và throw ra
-        // Nếu lỗi khác thì đánh dấu error
         const msg = String(e.message || e);
         if (msg.includes("MISSING_API_KEY")) throw e;
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
