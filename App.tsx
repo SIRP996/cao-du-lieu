@@ -41,7 +41,9 @@ const SourceInputCard = memo(({
 }) => {
   const htmlInputRef = useRef<HTMLTextAreaElement>(null);
   const urlsInputRef = useRef<HTMLTextAreaElement>(null);
-  const isShopee = source.name.toUpperCase().includes('SHOPEE');
+  
+  // Cho phép nhập voucher với Shopee VÀ TikTok
+  const hasVoucher = source.name.toUpperCase().includes('SHOPEE') || source.name.toUpperCase().includes('TIKTOK');
 
   useEffect(() => {
     if (htmlInputRef.current && htmlInputRef.current.value !== source.htmlHint) {
@@ -68,7 +70,7 @@ const SourceInputCard = memo(({
            />
         </div>
         
-        {isShopee && (
+        {hasVoucher && (
           <div className="flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-100 animate-in fade-in zoom-in duration-300">
              <Tag className="w-3 h-3 text-orange-500" />
              <input 
@@ -132,7 +134,8 @@ const ScraperWorkspace: React.FC = () => {
   // -- STATE --
   const [sources, setSources] = useState<SourceConfig[]>(
     Array(5).fill(null).map((_, i) => {
-      const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
+      // Cập nhật danh sách mặc định có TIKTOK
+      const names = ["SHOPEE", "LAZADA", "TIKTOK", "TIKI", "HASAKI"];
       return { name: names[i], urls: [''], htmlHint: '' };
     })
   );
@@ -285,6 +288,7 @@ const ScraperWorkspace: React.FC = () => {
          if (lowerUrl.includes("shopee")) targetName = "SHOPEE";
          else if (lowerUrl.includes("lazada")) targetName = "LAZADA";
          else if (lowerUrl.includes("tiki")) targetName = "TIKI";
+         else if (lowerUrl.includes("tiktok")) targetName = "TIKTOK"; // Bắt link tiktok
          else if (lowerUrl.includes("hasaki")) targetName = "HASAKI";
          else if (lowerUrl.includes("sociolla")) targetName = "SOCIOLA";
          else if (lowerUrl.includes("thegioiskinfood")) targetName = "THEGIOISKINFOOD";
@@ -298,7 +302,10 @@ const ScraperWorkspace: React.FC = () => {
                 typeLog(`[AUTO-FILL] Phát hiện Focus: Nhập vào ô số ${idx + 1}`, 'matrix');
             } 
             else {
+                // Ưu tiên tìm tab có tên trùng khớp
                 idx = next.findIndex(s => s.name.toUpperCase() === targetName);
+                
+                // Nếu không tìm thấy tab tên đó, tìm tab trống
                 if (idx === -1) {
                     idx = next.findIndex(s => !s.htmlHint && (!s.urls[0] || s.urls[0] === ''));
                 }
@@ -315,12 +322,13 @@ const ScraperWorkspace: React.FC = () => {
             const newHtml = currentHtml 
                 ? currentHtml + "\n\n<!-- ================= NEXT PRODUCT DATA ================= -->\n\n" + html 
                 : html;
+            
+            // Logic đổi tên tab nếu nó đang trống và mình detect được nguồn
+            const shouldRename = (targetName && next[idx].name !== targetName && (!next[idx].htmlHint || next[idx].htmlHint.length < 10));
 
             next[idx] = {
                 ...next[idx],
-                name: (next[idx].name === "SOCIOLA" || next[idx].name === "THEGIOISKINFOOD" || next[idx].name === "HASAKI" || next[idx].name === "SHOPEE" || next[idx].name === "LAZADA") && targetName && idx !== focusedSourceIdxRef.current 
-                    ? targetName 
-                    : next[idx].name, 
+                name: shouldRename ? targetName : next[idx].name, 
                 htmlHint: newHtml, 
                 urls: newUrls 
             };
@@ -372,7 +380,7 @@ const ScraperWorkspace: React.FC = () => {
           setCurrentProject(newProj);
           // Khi tạo mới, reset workspace
           setSources(Array(5).fill(null).map((_, i) => {
-              const names = ["SOCIOLA", "THEGIOISKINFOOD", "HASAKI", "SHOPEE", "LAZADA"];
+              const names = ["SHOPEE", "LAZADA", "TIKTOK", "TIKI", "HASAKI"];
               return { name: names[i], urls: [''], htmlHint: '' };
           }));
           setResults([]);
@@ -582,7 +590,8 @@ const ScraperWorkspace: React.FC = () => {
       
       const sourceConfig = sources[item.sourceIndex - 1];
       let finalPrice = item.gia;
-      if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
+      // Áp dụng voucher cho Shopee HOẶC TikTok
+      if (sourceConfig && (sourceConfig.name.toUpperCase().includes('SHOPEE') || sourceConfig.name.toUpperCase().includes('TIKTOK')) && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
         finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
         finalPrice = Math.round(finalPrice / 100) * 100;
       }
@@ -614,7 +623,7 @@ const ScraperWorkspace: React.FC = () => {
         if(!allGroups[k]) allGroups[k] = { prices: {} };
         const sourceConfig = sources[item.sourceIndex - 1];
         let finalPrice = item.gia;
-        if (sourceConfig && sourceConfig.name.toUpperCase().includes('SHOPEE') && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
+        if (sourceConfig && (sourceConfig.name.toUpperCase().includes('SHOPEE') || sourceConfig.name.toUpperCase().includes('TIKTOK')) && sourceConfig.voucherPercent && sourceConfig.voucherPercent > 0) {
             finalPrice = item.gia * (1 - (sourceConfig.voucherPercent / 100));
         }
         allGroups[k].prices[item.sourceIndex] = finalPrice;
@@ -1145,7 +1154,8 @@ const ScraperWorkspace: React.FC = () => {
                         <th key={i} className="px-6 py-8 text-[11px] font-black uppercase text-indigo-600 tracking-widest text-center border-l border-slate-100 bg-indigo-50/10">
                           <div className="flex flex-col items-center">
                             <span>{src.name.toUpperCase()}</span>
-                            {src.name.toUpperCase().includes('SHOPEE') && src.voucherPercent && src.voucherPercent > 0 && (
+                            {/* Hiển thị badge voucher cho cả Shopee và TikTok */}
+                            {(src.name.toUpperCase().includes('SHOPEE') || src.name.toUpperCase().includes('TIKTOK')) && src.voucherPercent && src.voucherPercent > 0 && (
                                 <span className="mt-1 text-[9px] bg-orange-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
                                     -{src.voucherPercent}%
                                 </span>

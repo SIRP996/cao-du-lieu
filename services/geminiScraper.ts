@@ -171,11 +171,13 @@ const preProcessHtml = (rawHtml: string): string => {
     trashTags.forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
 
     // 3. Xóa các class/id thường chứa "Sản phẩm tương tự" hoặc "Gợi ý" để tránh cào nhầm
-    // Hasaki/Shopee specific blacklist
+    // Hasaki/Shopee/TikTok specific blacklist
     const blacklistSelectors = [
         '[class*="recommend"]', '[id*="recommend"]', 
         '[class*="suggestion"]', '[id*="suggestion"]',
-        '.footer', '#footer', '.header', '#header'
+        '.footer', '#footer', '.header', '#header',
+        'video', 'canvas', '.xgplayer-container', // TikTok junk
+        '[data-e2e="video-container"]', '[data-e2e="live-room-container"]'
     ];
     blacklistSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(el => el.remove()));
 

@@ -23,30 +23,38 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
                     ];
                     trashSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
 
-                    // 2. XÓA PHẦN "GỢI Ý CHO BẠN" / "SẢN PHẨM TƯƠNG TỰ" (Quan trọng)
-                    // Shopee: Tìm các header section có chữ "Gợi ý", "Tương tự" và xóa section đó
+                    // 2. TIKTOK SPECIAL CLEANING (QUAN TRỌNG: Video/Live rất nặng)
+                    const tiktokTrash = [
+                        'video', 'canvas', 
+                        '.xgplayer-container', // Video player
+                        '[data-e2e="video-container"]', 
+                        '[data-e2e="live-room-container"]', // Livestream
+                        '.tiktok-video-player'
+                    ];
+                    tiktokTrash.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
+
+                    // 3. XÓA PHẦN "GỢI Ý CHO BẠN" / "SẢN PHẨM TƯƠNG TỰ"
+                    // Shopee
                     const headers = clone.querySelectorAll('.shopee-header-section__header__title');
                     headers.forEach(h => {
                         const text = h.innerText.toLowerCase();
                         if (text.includes('gợi ý') || text.includes('tương tự') || text.includes('có thể bạn cũng thích') || text.includes('recommend')) {
-                            // Tìm phần tử cha chứa toàn bộ section này để xóa
                             const section = h.closest('.shopee-header-section') || h.closest('.section-recommend') || h.parentNode.parentNode;
                             if (section) section.remove();
                         }
                     });
 
-                    // Lazada: Xóa phần recommendation (thường nằm trong div id="recommendation")
+                    // Lazada
                     const lazRec = clone.querySelector('[data-spm="recommendation"]');
                     if (lazRec) lazRec.remove();
 
-                    // Tiki: Xóa phần "Sản phẩm tương tự"
+                    // Tiki
                     const tikiRec = clone.querySelectorAll('div[data-view-id="product_list_container"]');
-                    // Giữ lại cái đầu tiên (Main), xóa các cái sau (thường là suggestion)
                     if (tikiRec.length > 1) {
                          for(let i=1; i<tikiRec.length; i++) tikiRec[i].remove();
                     }
 
-                    // 3. Clean Comment Nodes
+                    // 4. Clean Comment Nodes
                     const cleanComments = (node) => {
                         for (let i = 0; i < node.childNodes.length; i++) {
                             const child = node.childNodes[i];

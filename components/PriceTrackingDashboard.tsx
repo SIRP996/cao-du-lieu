@@ -315,7 +315,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                                 <td className="p-4 text-center border-l border-slate-700/50">
                                     <div className="flex justify-center">
                                         <MiniSparkline 
-                                            history={Object.values(product.sources)[0]?.history || []} 
+                                            history={(Object.values(product.sources) as TrackingSourceData[])[0]?.history || []} 
                                             color="#6366f1" 
                                         />
                                     </div>
