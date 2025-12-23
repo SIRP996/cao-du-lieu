@@ -805,35 +805,47 @@ const ScraperWorkspace: React.FC = () => {
       <div className="max-w-[1700px] mx-auto p-4 md:p-8 space-y-8">
         
         {/* Header Section */}
-        <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm shadow-slate-200/50">
-          <div className="flex items-center gap-6">
+        <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white p-8 rounded-[3rem] border border-slate-200 shadow-sm shadow-slate-200/50 relative overflow-hidden">
+           {/* Background Gradient */}
+           <div className="absolute top-0 right-0 w-1/3 h-full bg-gradient-to-l from-indigo-50/50 to-transparent pointer-events-none"></div>
+
+          <div className="flex items-center gap-6 z-10">
             <div className="bg-indigo-600 p-5 rounded-[2rem] shadow-xl shadow-indigo-100">
               <Cpu className="w-8 h-8 text-white animate-pulse" />
             </div>
             <div>
-              <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.4</span></h1>
+              <h1 className="text-3xl font-black uppercase tracking-tighter text-slate-900">Ultra Matrix <span className="text-indigo-600">v2.5</span></h1>
               <div className="flex items-center gap-4 mt-2">
-                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg">
+                  <div className="flex items-center gap-2 text-[11px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
                       <FolderOpen className="w-3 h-3" />
                       {currentProject ? currentProject.name : "Chưa chọn dự án"}
                   </div>
                   
-                  {/* CLOUD SYNC STATUS INDICATOR (NEW) */}
-                  <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg transition-all duration-300 ${isCloudSyncing ? 'bg-indigo-50 text-indigo-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                  {/* CLOUD SYNC STATUS INDICATOR (ENHANCED) */}
+                  <div className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-4 py-1.5 rounded-lg transition-all duration-300 shadow-sm border ${
+                      isCloudSyncing 
+                      ? 'bg-amber-50 text-amber-600 border-amber-200' 
+                      : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                  }`}>
                       {isCloudSyncing ? (
                           <>
-                            <CloudLightning className="w-3 h-3 animate-pulse" /> Đang lưu...
+                            <div className="relative">
+                                <CloudLightning className="w-3 h-3 animate-bounce" />
+                                <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping"></div>
+                            </div>
+                            <span>Đang đồng bộ...</span>
                           </>
                       ) : (
                           <>
-                            <CheckCheck className="w-3 h-3" /> Đã đồng bộ {lastSyncTime ? `(${lastSyncTime.toLocaleTimeString()})` : ''}
+                            <CheckCheck className="w-3 h-3" /> 
+                            <span>Đã lưu Cloud {lastSyncTime ? `(${lastSyncTime.toLocaleTimeString()})` : ''}</span>
                           </>
                       )}
                   </div>
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4 z-10">
              {currentUser && (
                <div 
                  onClick={() => { refreshProjects(); setShowProjectManager(true); }}

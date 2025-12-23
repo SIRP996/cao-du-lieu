@@ -1,17 +1,49 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ProductData } from "../types";
 
-// Hàm khởi tạo AI an toàn, chỉ chạy khi cần dùng
-const getAIClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey || apiKey.length < 10) {
+// --- KEY ROTATION SYSTEM ---
+// Hàm lấy danh sách Key từ biến môi trường
+const getKeys = (): string[] => {
+  // Vite sẽ thay thế process.env.API_KEY bằng chuỗi thực tế khi build
+  const envKey = process.env.API_KEY || "";
+  
+  // Tách key bằng dấu phẩy, loại bỏ khoảng trắng dư thừa
+  const keys = envKey.split(',').map(k => k.trim()).filter(k => k.length > 10);
+  
+  if (keys.length === 0) {
+    console.error("❌ KHÔNG TÌM THẤY API KEY!");
     throw new Error(
       "❌ THIẾU API KEY!\n" +
-      "- Trên Vercel: Vào Settings > Environment Variables > Thêm Key='API_KEY', Value='AIza...' > Sau đó REDEPLOY lại.\n" +
-      "- Dưới Local: Kiểm tra file .env hoặc biến môi trường."
+      "Vui lòng vào Vercel > Settings > Environment Variables:\n" +
+      "Thêm Key='API_KEY', Value='Key1,Key2,Key3...' (cách nhau dấu phẩy).\n" +
+      "Sau đó REDEPLOY lại dự án."
     );
   }
-  return new GoogleGenAI({ apiKey });
+  return keys;
+};
+
+// Biến lưu vị trí key đang dùng hiện tại
+let currentKeyIndex = 0;
+
+// Hàm khởi tạo AI Client với Key hiện tại
+const getAIClient = () => {
+  const keys = getKeys();
+  // Lấy key theo vòng tròn (0 -> 1 -> 2 -> 0...)
+  const key = keys[currentKeyIndex % keys.length];
+  // Log nhẹ để debug (che bớt key để bảo mật)
+  console.log(`🔑 Đang dùng Key [${(currentKeyIndex % keys.length) + 1}/${keys.length}]: ...${key.slice(-4)}`);
+  return new GoogleGenAI({ apiKey: key });
+};
+
+// Hàm chuyển sang Key tiếp theo
+const rotateKey = (): boolean => {
+  const keys = getKeys();
+  if (keys.length <= 1) return false; // Không có key dự phòng thì không đổi được
+  
+  currentKeyIndex = (currentKeyIndex + 1) % keys.length;
+  console.warn(`🔄 Gặp lỗi giới hạn! Đang đổi sang Key số: ${currentKeyIndex + 1}`);
+  return true;
 };
 
 // DANH SÁCH TÊN CHUẨN (OFFICIAL DICTIONARY)
@@ -107,17 +139,26 @@ const preProcessHtml = (rawHtml: string): string => {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- URL RESOLVER HELPER ---
-// Hàm này đảm bảo link luôn là tuyệt đối (https://...)
 const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   if (!rawUrl) return baseUrl;
   try {
-    // Nếu rawUrl đã là tuyệt đối (http...), new URL sẽ giữ nguyên nó
-    // Nếu rawUrl là tương đối (/product...), new URL sẽ nối với baseUrl
     return new URL(rawUrl, baseUrl).href;
   } catch (e) {
-    // Trường hợp tệ nhất, trả về rawUrl (hoặc có thể trả về baseUrl nếu muốn an toàn tuyệt đối)
     return rawUrl;
   }
+};
+
+// --- QUANTITY EXTRACTION HELPER ---
+const extractQuantity = (rawName: string): number => {
+  const clean = rawName.toLowerCase();
+  const prefixMatch = clean.match(/\b(combo|bộ|set|mua|sl|số lượng)\s*[:.-]*\s*(\d+)/);
+  if (prefixMatch && prefixMatch[2]) return parseInt(prefixMatch[2]);
+  const xMatch = clean.match(/[\s\(\[][xX]\s*(\d+)\b/);
+  if (xMatch && xMatch[1]) return parseInt(xMatch[1]);
+  if (clean.includes("mua 1 tặng 1") || clean.includes("mua 1 tang 1")) return 2;
+  const startMatch = clean.match(/^(\d+)\s*(chai|lọ|hộp|túi|miếng|cái)/);
+  if (startMatch && startMatch[1]) return parseInt(startMatch[1]);
+  return 1;
 };
 
 // --- ALGORITHMIC LOGIC ---
@@ -162,50 +203,87 @@ const normalizeProductAlgorithm = (rawName: string) => {
   if (finalProducts.length === 1) {
     normalizedName = finalProducts[0];
     plCombo = "Lẻ";
-    // Heuristic mapping (giản lược)
     if (normalizedName.includes("tẩy trang")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Tẩy trang"; }
     else if (normalizedName.includes("rửa mặt")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Sữa rửa mặt"; }
-    // ... thêm logic mapping nếu cần
+    else if (normalizedName.includes("mặt nạ")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Mặt nạ"; }
+    else if (normalizedName.includes("tinh chất") || normalizedName.includes("serum")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Serum"; }
+    
+    const qty = extractQuantity(rawName);
+    if (qty > 1) {
+       const prefix = `Combo ${qty}`;
+       normalizedName = `${prefix} ${finalProducts[0]}`;
+       plCombo = prefix;
+       phanLoaiTong = "Combo";
+       phanLoaiChiTiet = "Bộ sản phẩm";
+    } else if (/\b(combo|bộ|set)\b/i.test(rawName)) {
+           normalizedName = `Combo ${finalProducts[0]}`;
+           plCombo = "Combo";
+           phanLoaiTong = "Combo";
+    }
+
   } else if (finalProducts.length > 1) {
     normalizedName = finalProducts.sort().join(" + ");
     plCombo = `Combo ${finalProducts.length}`;
     phanLoaiTong = "Combo";
     phanLoaiChiTiet = "Bộ sản phẩm";
-  }
-
-  if (/combo|bộ|set|mua.*tặng/i.test(rawName) && finalProducts.length <= 1) {
-     if (plCombo === "Lẻ") plCombo = "Combo (Raw)";
+  } else {
+    const qty = extractQuantity(rawName);
+    if (qty > 1) {
+        plCombo = `Combo ${qty}`;
+        phanLoaiTong = "Combo";
+    } else if (/combo|bộ|set|mua.*tặng/i.test(rawName)) {
+        plCombo = "Combo (Raw)";
+        phanLoaiTong = "Combo";
+    }
   }
 
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC ---
+// --- AI LOGIC (WITH KEY ROTATION) ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
-  const ai = getAIClient(); // Lazy init
-  const prompt = `
-    BẠN LÀ DATA NORMALIZER.
-    INPUT: Danh sách tên thô.
-    DICTIONARY: ${OFFICIAL_NAMES.join('\n')}
-    
-    YÊU CẦU:
-    1. Xác định "Lẻ" hay "Combo".
-    2. Chuẩn hóa tên theo Dictionary. Nếu là Combo, tách ra và nối bằng " + ".
-    
-    Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
-    
-    LIST: ${JSON.stringify(rawNames)}
-  `;
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: prompt,
-    config: { responseMimeType: "application/json" }
-  });
-  return JSON.parse(response.text || "{}");
+  
+  let retries = 3;
+  while (retries > 0) {
+    try {
+      const ai = getAIClient(); // Luôn lấy instance mới nhất (có thể đã đổi key)
+      const prompt = `
+        BẠN LÀ DATA NORMALIZER.
+        INPUT: Danh sách tên thô.
+        DICTIONARY: ${OFFICIAL_NAMES.join('\n')}
+        
+        YÊU CẦU:
+        1. Xác định "Lẻ" hay "Combo".
+        2. Nếu là Combo cùng loại (ví dụ: Combo 2 chai...), hãy thêm tiền tố "Combo X" vào tên chuẩn.
+        3. Chuẩn hóa tên theo Dictionary. Nếu là Combo nhiều loại khác nhau, tách ra và nối bằng " + ".
+        
+        Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
+        
+        LIST: ${JSON.stringify(rawNames)}
+      `;
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      return JSON.parse(response.text || "{}");
+    } catch (error: any) {
+      // Bắt lỗi 429 (Too Many Requests) hoặc Resource Exhausted
+      if (error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429) {
+         const switched = rotateKey(); // Đổi key
+         if (switched) {
+             console.log("⚠️ 429 Hit. Retrying with new key...");
+             continue; // Thử lại vòng lặp với key mới
+         }
+      }
+      throw error;
+    }
+  }
+  return {};
 };
 
-// --- PHASE 1: RAW EXTRACTION ONLY ---
+// --- PHASE 1: RAW EXTRACTION (WITH KEY ROTATION) ---
 export const parseRawProducts = async (
   url: string, 
   htmlHint: string, 
@@ -216,15 +294,23 @@ export const parseRawProducts = async (
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
 
   let retries = 0;
-  const maxRetries = 5;
-  let currentDelay = 5000;
+  const maxRetries = 15; // Tăng số lần thử vì chúng ta có nhiều key
+  let currentDelay = 2000;
 
-  // Lazy init AI here
-  const ai = getAIClient();
-
-  while (true) {
+  while (retries < maxRetries) {
     try {
-      const prompt = `EXTRACT JSON products from HTML: [{sanPham, gia, productUrl}]. GET ALL ITEMS, NO FILTER. HTML: ${cleanHtmlInput.substring(0, 500000)}`;
+      const ai = getAIClient(); // Lấy client với key hiện tại
+      
+      const prompt = `
+        EXTRACT PRODUCTS FROM HTML.
+        Target: Main product list (search results). 
+        IGNORE: Recommendations, 'Similar Products', 'Top Products', Footer items.
+        
+        Return JSON Array: [{sanPham, gia, productUrl}]
+        
+        HTML: ${cleanHtmlInput.substring(0, 500000)}
+      `;
+      
       const response = await ai.models.generateContent({
         model: model,
         contents: prompt,
@@ -248,18 +334,15 @@ export const parseRawProducts = async (
       const rawData = JSON.parse(response.text || "[]");
 
       return rawData.map((item: any) => {
-        // --- FIX LINK LOGIC ---
-        // Dùng source URL (biến url đầu vào) làm base để nối link
         const fixedUrl = resolveProductUrl(item.productUrl, url);
-        
         return {
           ...item,
-          normalizedName: item.sanPham, // Tạm thời để tên gốc
+          normalizedName: item.sanPham,
           plCombo: "Raw",
           phanLoaiTong: "Chưa xử lý",
           phanLoaiChiTiet: "Chưa xử lý",
-          productUrl: fixedUrl, // Sử dụng link đã fix
-          url: url, // Link nguồn cha
+          productUrl: fixedUrl,
+          url: url,
           sourceIndex,
           status: 'pending' as const
         };
@@ -267,16 +350,29 @@ export const parseRawProducts = async (
 
     } catch (error: any) {
       const isRateLimit = error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429;
-      if (isRateLimit && retries < maxRetries) {
+      
+      if (isRateLimit) {
+        const switched = rotateKey();
+        if (switched) {
+             console.log("⚡ Auto-switched API Key due to Rate Limit.");
+             await delay(1000); 
+             continue; // Thử lại ngay với key mới, không tăng retries
+        } else {
+             // Hết key để đổi, buộc phải chờ
+             console.warn(`⚠️ Rate limit reached and no more keys. Waiting ${currentDelay}ms...`);
+             await delay(currentDelay);
+             currentDelay *= 1.5;
+             retries++;
+        }
+      } else {
+        // Các lỗi khác thì throw luôn hoặc retry nhẹ
+        console.error("Gemini Error:", error);
         retries++;
-        console.warn(`⚠️ Error (429). Retry ${retries}/${maxRetries}...`);
         await delay(currentDelay);
-        currentDelay *= 1.5;
-        continue;
       }
-      throw error;
     }
   }
+  return [];
 };
 
 // --- PHASE 2: NORMALIZATION PROCESS (Code or AI) ---
@@ -289,31 +385,24 @@ export const processNormalization = async (
   let resultProducts: ProductData[] = [];
   
   if (method === 'code') {
-    // --- CODE MODE (CHUNKING) ---
     const chunkSize = 50; 
     for (let i = 0; i < products.length; i += chunkSize) {
       const chunk = products.slice(i, i + chunkSize);
-      
       const processedChunk = chunk.map(item => {
         const normInfo = normalizeProductAlgorithm(item.sanPham);
         return { ...item, ...normInfo, status: 'success' } as ProductData;
       });
-      
       resultProducts = [...resultProducts, ...processedChunk];
-      
       if (onProgress) {
         const percent = Math.round(((i + chunk.length) / products.length) * 100);
         onProgress(percent);
       }
-      
       await delay(10);
     }
     return resultProducts;
 
   } else {
-    // --- AI MODE (BATCHING) ---
     const batchSize = 30;
-    
     for (let i = 0; i < products.length; i += batchSize) {
       const batch = products.slice(i, i + batchSize);
       const rawNames = batch.map(p => p.sanPham);
@@ -331,7 +420,6 @@ export const processNormalization = async (
           } as ProductData;
         });
         resultProducts = [...resultProducts, ...processedBatch];
-        
         if (onProgress) {
             const percent = Math.round(((i + batch.length) / products.length) * 100);
             onProgress(percent);
