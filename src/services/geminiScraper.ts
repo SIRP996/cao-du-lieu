@@ -15,9 +15,10 @@ const getKeys = (): string[] => {
   
   // Logic mới: Tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
   if (localKey && localKey.length > 10) {
+      // Regex: Tách bằng dấu phẩy HOẶC xuống dòng, sau đó trim khoảng trắng
       const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
       if (rawKeys.length > 0) {
-          // Nếu danh sách key thay đổi so với lần trước, reset index
+          // Nếu danh sách key thay đổi so với lần trước (do user mới nhập), cập nhật lại
           if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
               console.log(`🔑 Đã nạp mới ${rawKeys.length} API Key từ Cài đặt.`);
               keyList = rawKeys;
@@ -27,13 +28,11 @@ const getKeys = (): string[] => {
       }
   }
 
-  // 2. Nếu không có LocalStorage, dùng biến môi trường
+  // 2. Nếu không có LocalStorage, dùng biến môi trường (cũng hỗ trợ phẩy)
   if (keyList.length > 0) return keyList;
 
   const envKey = process.env.API_KEY || "";
-  
-  // Tách key bằng dấu phẩy và làm sạch khoảng trắng
-  const keys = envKey.split(',').map(k => k.trim()).filter(k => k.length > 10);
+  const keys = envKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
   
   if (keys.length === 0) {
     console.warn("⚠️ Chưa có API Key. Vui lòng nhập trong phần Cài đặt.");
@@ -57,21 +56,19 @@ const getAIClient = () => {
   const keyIndex = currentKeyIndex % keys.length;
   const key = keys[keyIndex];
   
-  // console.log(`🤖 Đang dùng Key #${keyIndex + 1} (đuôi ...${key.slice(-4)})`);
   return new GoogleGenAI({ apiKey: key });
 };
 
-// Hàm chuyển sang Key tiếp theo
+// Hàm chuyển sang Key tiếp theo (khi gặp lỗi)
 const rotateKey = (): boolean => {
   const keys = getKeys();
   if (keys.length <= 1) {
-      console.warn("⚠️ Chỉ có 1 Key, không thể đổi Key khác.");
-      return false; 
+      return false; // Chỉ có 1 key thì không đổi được
   }
   
   const prevIndex = currentKeyIndex;
   currentKeyIndex = (currentKeyIndex + 1) % keys.length;
-  console.warn(`🔄 Đổi API Key: [Key #${prevIndex + 1}] -> [Key #${currentKeyIndex + 1}] (Tổng: ${keys.length} keys)`);
+  console.warn(`🔄 Auto-Rotate: Chuyển từ Key #${prevIndex + 1} sang Key #${currentKeyIndex + 1}`);
   return true;
 };
 
@@ -167,17 +164,11 @@ const preProcessHtml = (rawHtml: string): string => {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- URL RESOLVER HELPER ---
 const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   if (!rawUrl) return baseUrl;
-  try {
-    return new URL(rawUrl, baseUrl).href;
-  } catch (e) {
-    return rawUrl;
-  }
+  try { return new URL(rawUrl, baseUrl).href; } catch (e) { return rawUrl; }
 };
 
-// --- QUANTITY EXTRACTION HELPER ---
 const extractQuantity = (rawName: string): number => {
   const clean = rawName.toLowerCase();
   const prefixMatch = clean.match(/\b(combo|bộ|set|mua|sl|số lượng)\s*[:.-]*\s*(\d+)/);
@@ -190,7 +181,6 @@ const extractQuantity = (rawName: string): number => {
   return 1;
 };
 
-// --- ALGORITHMIC LOGIC ---
 const calculateMatchScore = (rawName: string, officialName: string) => {
   const rawSlug = slugify(rawName);
   const officialSlug = slugify(officialName);
@@ -269,7 +259,7 @@ const normalizeProductAlgorithm = (rawName: string) => {
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC (WITH KEY ROTATION) ---
+// --- AI LOGIC WITH RETRY & ROTATION ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
   
@@ -298,11 +288,12 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
       });
       return JSON.parse(response.text || "{}");
     } catch (error: any) {
-      const msg = error.message || "";
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || error.status === 429 || msg.includes('400') || msg.includes('API key')) {
+      const msg = String(error.message || error);
+      // Bắt lỗi quota hoặc lỗi key để đổi key
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key')) {
          if (rotateKey()) {
              await delay(1000);
-             continue; 
+             continue; // Thử lại với key mới
          }
       }
       throw error;
@@ -311,7 +302,7 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   return {};
 };
 
-// --- PHASE 1: RAW EXTRACTION (WITH KEY ROTATION) ---
+// --- PHASE 1: RAW EXTRACTION WITH RETRY & ROTATION ---
 export const parseRawProducts = async (
   url: string, 
   htmlHint: string, 
@@ -322,13 +313,12 @@ export const parseRawProducts = async (
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
 
   let retries = 0;
-  const maxRetries = 15; // Tăng retries vì có nhiều key
+  const maxRetries = 15; // Tăng số lần thử vì có cơ chế đổi key
   let currentDelay = 2000;
 
   while (retries < maxRetries) {
     try {
-      const ai = getAIClient(); // Lấy key mới nhất (hoặc key hiện tại)
-      
+      const ai = getAIClient();
       const prompt = `
         EXTRACT PRODUCTS FROM HTML.
         Target: Main product list (search results). 
@@ -377,28 +367,29 @@ export const parseRawProducts = async (
       });
 
     } catch (error: any) {
-      // Bắt lỗi 429, 400 hoặc lỗi Key
-      const msg = error.message || "";
-      const shouldRotate = 
+      const msg = String(error.message || error);
+      const isKeyError = 
           msg.includes('429') || 
           msg.includes('RESOURCE_EXHAUSTED') || 
           error.status === 429 ||
           error.status === 400 || 
           msg.includes('INVALID_ARGUMENT') ||
-          msg.includes('API key not valid');
+          msg.includes('API key');
       
-      if (shouldRotate) {
+      if (isKeyError) {
         if (rotateKey()) {
+             // Đổi key thành công, thử lại ngay
              await delay(1000); 
-             continue; // Thử lại ngay với key mới
+             continue;
         } else {
-             // Hết key để đổi -> Throw để UI hiện modal nhập
-             throw error;
+             // Hết key để đổi -> Ném lỗi để UI hiện Popup nhập key
+             throw new Error("MISSING_API_KEY");
         }
       } else {
          console.error("Gemini Error:", error);
          retries++;
          await delay(currentDelay);
+         // currentDelay *= 1.5; // Exponential backoff (Optional)
       }
     }
   }
@@ -455,9 +446,9 @@ export const processNormalization = async (
             onProgress(percent);
         }
         await delay(500); 
-      } catch (e) {
+      } catch (e: any) {
         console.error("Batch error", e);
-        // Nếu lỗi hàng loạt thì thử lại với Code fallback hoặc đánh dấu lỗi
+        // Nếu lỗi 429/400 ở đây, có thể do normalizeBatchWithAI đã retry hết key -> đánh dấu error
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
       }
     }

@@ -306,7 +306,6 @@ const ScraperWorkspace: React.FC = () => {
     }
 
     // Lưu chuỗi gốc để lần sau user mở ra vẫn thấy nguyên văn (dễ sửa)
-    // Hoặc lưu chuỗi đã chuẩn hóa. Ở đây lưu chuỗi chuẩn hóa bằng dấu phẩy
     const savedString = keys.join(',');
     localStorage.setItem(API_KEY_STORAGE, savedString);
     setShowApiKeyModal(false);
@@ -458,13 +457,13 @@ const ScraperWorkspace: React.FC = () => {
             typeLog(`[WARN] Không tìm thấy dữ liệu.`, 'warning');
         }
       } catch (err: any) {
-        // Handle API KEY Errors explicitly
         const msg = String(err.message || err);
-        if (msg.includes("API key not valid") || msg.includes("MISSING_API_KEY") || msg.includes("400")) {
-             typeLog(`[CRITICAL] Lỗi API Key: ${msg}`, 'error');
-             setShowApiKeyModal(true); // Auto open modal
+        // Bắt lỗi cụ thể để hiện Modal Key
+        if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid") || msg.includes("400")) {
+             typeLog(`[CRITICAL] Lỗi Key: ${msg}`, 'error');
+             setShowApiKeyModal(true); 
              setStatus(AppStatus.ERROR);
-             return; // Stop processing
+             return; 
         }
         typeLog(`[ERR] Lỗi xử lý ${task.src.name}: ${msg}`, 'error');
       }
@@ -487,8 +486,8 @@ const ScraperWorkspace: React.FC = () => {
       setShowSuccessModal(true);
     } catch (e: any) {
       const msg = String(e.message || e);
-       if (msg.includes("API key not valid") || msg.includes("MISSING_API_KEY")) {
-             typeLog(`[CRITICAL] Lỗi API Key khi tối ưu: ${msg}`, 'error');
+       if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid")) {
+             typeLog(`[CRITICAL] Lỗi Key khi tối ưu: ${msg}`, 'error');
              setShowApiKeyModal(true); 
       } else {
         typeLog(`[ERR] Lỗi tối ưu hóa: ${msg}`, 'error');
@@ -881,7 +880,7 @@ const ScraperWorkspace: React.FC = () => {
                 <LogOut className="w-5 h-5" />
              </button>
 
-             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length ===0} className="flex items-center gap-3 px-10 py-5 bg-white text-indigo-600 border border-indigo-100 rounded-[2rem] hover:bg-indigo-50 disabled:opacity-50 font-black text-[13px] shadow-sm transition-all uppercase tracking-widest">
+             <button onClick={() => exportToMultiSheetExcel(results, groupedResults, sources)} disabled={groupedResults.length === 0} className="flex items-center gap-3 px-10 py-5 bg-white text-indigo-600 border border-indigo-100 rounded-[2rem] hover:bg-indigo-50 disabled:opacity-50 font-black text-[13px] shadow-sm transition-all uppercase tracking-widest">
               <Download className="w-5 h-5" /> Xuất Excel
             </button>
           </div>
