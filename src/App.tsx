@@ -162,6 +162,7 @@ const ScraperWorkspace: React.FC = () => {
 
   // -- EFFECTS --
   useEffect(() => {
+    // 1. Load data cũ
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try { setResults(JSON.parse(saved)); } catch (e) { console.error(e); }
@@ -170,8 +171,16 @@ const ScraperWorkspace: React.FC = () => {
     if (savedSources) {
       try { setSources(JSON.parse(savedSources)); } catch (e) { console.error(e); }
     }
+
+    // 2. CHECK API KEY ON MOUNT (QUAN TRỌNG: Tự động bật Modal nếu chưa có Key)
     const savedKey = localStorage.getItem(API_KEY_STORAGE);
-    if (savedKey) setUserApiKey(savedKey);
+    if (savedKey) {
+        setUserApiKey(savedKey);
+    } else {
+        // Nếu không có Key trong LocalStorage, bật modal lên
+        // Delay 1s để UI render xong đẹp
+        setTimeout(() => setShowApiKeyModal(true), 800);
+    }
 
   }, []);
 
@@ -298,14 +307,14 @@ const ScraperWorkspace: React.FC = () => {
         return;
     }
 
-    // Tách key để kiểm tra
+    // Tách key để kiểm tra (dấu phẩy hoặc xuống dòng)
     const keys = cleaned.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
     if (keys.length === 0) {
         alert("Không tìm thấy Key hợp lệ nào (Key phải dài hơn 10 ký tự).");
         return;
     }
 
-    // Lưu chuỗi gốc để lần sau user mở ra vẫn thấy nguyên văn (dễ sửa)
+    // Lưu chuỗi chuẩn hóa (nối bằng dấu phẩy)
     const savedString = keys.join(',');
     localStorage.setItem(API_KEY_STORAGE, savedString);
     setShowApiKeyModal(false);
@@ -458,7 +467,7 @@ const ScraperWorkspace: React.FC = () => {
         }
       } catch (err: any) {
         const msg = String(err.message || err);
-        // Bắt lỗi cụ thể để hiện Modal Key
+        // Bắt lỗi MISSING_API_KEY để bật modal
         if (msg.includes("MISSING_API_KEY") || msg.includes("API key not valid") || msg.includes("400")) {
              typeLog(`[CRITICAL] Lỗi Key: ${msg}`, 'error');
              setShowApiKeyModal(true); 
@@ -613,9 +622,9 @@ const ScraperWorkspace: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 pb-20 font-sans relative">
       
-      {/* API KEY MODAL (CÀI ĐẶT) - FIXED TOP PRIORITY */}
+      {/* API KEY MODAL (CÀI ĐẶT) - Z-INDEX 10000 ĐỂ HIỆN TRÊN CÙNG */}
       {showApiKeyModal && (
-        <div className="fixed inset-0 bg-slate-900/90 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
+        <div className="fixed inset-0 bg-slate-900/90 z-[10000] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-300">
            <div className="bg-[#1e293b] rounded-[2rem] p-8 max-w-lg w-full shadow-2xl border border-slate-700 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-rose-500"></div>
               
@@ -865,13 +874,14 @@ const ScraperWorkspace: React.FC = () => {
                </div>
              )}
 
-             {/* API KEY BUTTON */}
+             {/* API KEY BUTTON - NÚT NHẬP KEY RÕ RÀNG HƠN */}
              <button 
                 onClick={() => setShowApiKeyModal(true)}
-                className="p-3 bg-slate-900 text-yellow-400 hover:bg-slate-800 rounded-full transition-all border-2 border-slate-800 hover:border-yellow-400 shadow-lg" 
+                className="flex items-center gap-2 px-6 py-4 bg-slate-900 text-yellow-400 hover:bg-slate-800 rounded-2xl transition-all border-2 border-slate-800 hover:border-yellow-400 shadow-xl" 
                 title="Cài đặt API Key"
              >
                 <Key className="w-5 h-5" />
+                <span className="text-[11px] font-black uppercase tracking-widest">NHẬP KEY</span>
              </button>
 
              <button onClick={() => { if(confirm("Xóa toàn bộ dữ liệu tạm?")) setResults([]); }} className="px-6 py-3 text-[11px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-all">Clear Temp</button>

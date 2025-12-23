@@ -10,15 +10,14 @@ let keyList: string[] = [];
 
 // Hàm lấy danh sách Key (Ưu tiên LocalStorage -> Env)
 const getKeys = (): string[] => {
-  // 1. Kiểm tra LocalStorage trước (User tự nhập)
+  // 1. Kiểm tra LocalStorage trước (User tự nhập trong Cài đặt)
   const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
   
-  // Logic mới: Tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
+  // Logic tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
   if (localKey && localKey.length > 10) {
-      // Regex: Tách bằng dấu phẩy HOẶC xuống dòng, sau đó trim khoảng trắng
       const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
       if (rawKeys.length > 0) {
-          // Nếu danh sách key thay đổi so với lần trước (do user mới nhập), cập nhật lại
+          // Nếu danh sách key thay đổi (người dùng mới nhập), reset lại
           if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
               console.log(`🔑 Đã nạp mới ${rawKeys.length} API Key từ Cài đặt.`);
               keyList = rawKeys;
@@ -28,14 +27,14 @@ const getKeys = (): string[] => {
       }
   }
 
-  // 2. Nếu không có LocalStorage, dùng biến môi trường (cũng hỗ trợ phẩy)
+  // 2. Nếu không có LocalStorage, dùng biến môi trường
   if (keyList.length > 0) return keyList;
 
   const envKey = process.env.API_KEY || "";
   const keys = envKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
   
   if (keys.length === 0) {
-    console.warn("⚠️ Chưa có API Key. Vui lòng nhập trong phần Cài đặt.");
+    // Trả về rỗng để UI biết mà hiện Popup
     return []; 
   }
 
@@ -49,17 +48,18 @@ const getAIClient = () => {
   const keys = getKeys();
   
   if (keys.length === 0) {
-      throw new Error("MISSING_API_KEY"); // Throw lỗi đặc biệt để UI bắt
+      // Throw lỗi đặc biệt để App.tsx bắt được và hiện Popup
+      throw new Error("MISSING_API_KEY"); 
   }
 
-  // Lấy key theo vòng tròn (0 -> 1 -> 2 -> 0...)
+  // Lấy key theo vòng tròn
   const keyIndex = currentKeyIndex % keys.length;
   const key = keys[keyIndex];
   
   return new GoogleGenAI({ apiKey: key });
 };
 
-// Hàm chuyển sang Key tiếp theo (khi gặp lỗi)
+// Hàm chuyển sang Key tiếp theo (khi gặp lỗi 429/400)
 const rotateKey = (): boolean => {
   const keys = getKeys();
   if (keys.length <= 1) {
@@ -290,7 +290,7 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
     } catch (error: any) {
       const msg = String(error.message || error);
       // Bắt lỗi quota hoặc lỗi key để đổi key
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key')) {
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key') || msg.includes('MISSING_API_KEY')) {
          if (rotateKey()) {
              await delay(1000);
              continue; // Thử lại với key mới
@@ -374,7 +374,8 @@ export const parseRawProducts = async (
           error.status === 429 ||
           error.status === 400 || 
           msg.includes('INVALID_ARGUMENT') ||
-          msg.includes('API key');
+          msg.includes('API key') ||
+          msg.includes('MISSING_API_KEY');
       
       if (isKeyError) {
         if (rotateKey()) {
@@ -448,7 +449,10 @@ export const processNormalization = async (
         await delay(500); 
       } catch (e: any) {
         console.error("Batch error", e);
-        // Nếu lỗi 429/400 ở đây, có thể do normalizeBatchWithAI đã retry hết key -> đánh dấu error
+        // Nếu lỗi Key thì sẽ được catch bên trong normalizeBatchWithAI và throw ra
+        // Nếu lỗi khác thì đánh dấu error
+        const msg = String(e.message || e);
+        if (msg.includes("MISSING_API_KEY")) throw e;
         resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
       }
     }
