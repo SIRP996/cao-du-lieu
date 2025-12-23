@@ -8,7 +8,7 @@ const getKeys = (): string[] => {
   // Vite sẽ thay thế process.env.API_KEY bằng chuỗi thực tế khi build
   const envKey = process.env.API_KEY || "";
   
-  // Tách key bằng dấu phẩy, loại bỏ khoảng trắng dư thừa
+  // QUAN TRỌNG: Tách key bằng dấu phẩy
   const keys = envKey.split(',').map(k => k.trim()).filter(k => k.length > 10);
   
   if (keys.length === 0) {
@@ -31,8 +31,10 @@ const getAIClient = () => {
   const keys = getKeys();
   // Lấy key theo vòng tròn (0 -> 1 -> 2 -> 0...)
   const key = keys[currentKeyIndex % keys.length];
+  
   // Log nhẹ để debug (che bớt key để bảo mật)
-  console.log(`🔑 Đang dùng Key [${(currentKeyIndex % keys.length) + 1}/${keys.length}]: ...${key.slice(-4)}`);
+  // console.log(`🔑 Đang dùng Key [${(currentKeyIndex % keys.length) + 1}/${keys.length}]: ...${key.slice(-4)}`);
+  
   return new GoogleGenAI({ apiKey: key });
 };
 
@@ -42,7 +44,7 @@ const rotateKey = (): boolean => {
   if (keys.length <= 1) return false; // Không có key dự phòng thì không đổi được
   
   currentKeyIndex = (currentKeyIndex + 1) % keys.length;
-  console.warn(`🔄 Gặp lỗi giới hạn! Đang đổi sang Key số: ${currentKeyIndex + 1}`);
+  console.warn(`🔄 Gặp lỗi! Đang đổi sang Key số: ${currentKeyIndex + 1}`);
   return true;
 };
 
@@ -148,16 +150,25 @@ const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   }
 };
 
-// --- QUANTITY EXTRACTION HELPER ---
+// --- QUANTITY EXTRACTION HELPER (NÂNG CẤP) ---
 const extractQuantity = (rawName: string): number => {
   const clean = rawName.toLowerCase();
+  
+  // 1. Case: "Combo 2", "Bộ 3", "Set 5", "Mua 2", "SL 2", "Số lượng 2"
   const prefixMatch = clean.match(/\b(combo|bộ|set|mua|sl|số lượng)\s*[:.-]*\s*(\d+)/);
   if (prefixMatch && prefixMatch[2]) return parseInt(prefixMatch[2]);
+  
+  // 2. Case: "x2", "x 3", "(x2)", "[x3]" (thường ở cuối hoặc trong ngoặc)
   const xMatch = clean.match(/[\s\(\[][xX]\s*(\d+)\b/);
   if (xMatch && xMatch[1]) return parseInt(xMatch[1]);
+  
+  // 3. Case đặc biệt: "Mua 1 tặng 1" -> Hiểu là 2
   if (clean.includes("mua 1 tặng 1") || clean.includes("mua 1 tang 1")) return 2;
+
+  // 4. Case đầu câu: "2 chai", "2 lọ", "3 hộp"
   const startMatch = clean.match(/^(\d+)\s*(chai|lọ|hộp|túi|miếng|cái)/);
   if (startMatch && startMatch[1]) return parseInt(startMatch[1]);
+
   return 1;
 };
 
@@ -175,6 +186,7 @@ const calculateMatchScore = (rawName: string, officialName: string) => {
 };
 
 const normalizeProductAlgorithm = (rawName: string) => {
+  // 1. Tìm sản phẩm trong từ điển
   const matches: { name: string, score: number }[] = [];
   OFFICIAL_NAMES.forEach(officialName => {
     const score = calculateMatchScore(rawName, officialName);
@@ -182,6 +194,7 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
   matches.sort((a, b) => b.score - a.score || b.name.length - a.name.length);
   
+  // Lọc trùng lặp
   const uniqueProducts = new Set<string>();
   matches.forEach(m => {
     let isSubset = false;
@@ -198,11 +211,16 @@ const normalizeProductAlgorithm = (rawName: string) => {
   });
 
   const finalProducts = Array.from(uniqueProducts);
+  
+  // 2. Logic xác định tên chuẩn
   let normalizedName = rawName, plCombo = "Lẻ", phanLoaiTong = "Khác", phanLoaiChiTiet = "Khác";
 
   if (finalProducts.length === 1) {
+    // TÌM THẤY 1 SẢN PHẨM KHỚP
     normalizedName = finalProducts[0];
     plCombo = "Lẻ";
+    
+    // Phân loại cơ bản
     if (normalizedName.includes("tẩy trang")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Tẩy trang"; }
     else if (normalizedName.includes("rửa mặt")) { phanLoaiTong = "Làm sạch"; phanLoaiChiTiet = "Sữa rửa mặt"; }
     else if (normalizedName.includes("mặt nạ")) { phanLoaiTong = "Dưỡng da"; phanLoaiChiTiet = "Mặt nạ"; }
@@ -215,10 +233,12 @@ const normalizeProductAlgorithm = (rawName: string) => {
        plCombo = prefix;
        phanLoaiTong = "Combo";
        phanLoaiChiTiet = "Bộ sản phẩm";
-    } else if (/\b(combo|bộ|set)\b/i.test(rawName)) {
+    } else {
+       if (/\b(combo|bộ|set)\b/i.test(rawName)) {
            normalizedName = `Combo ${finalProducts[0]}`;
            plCombo = "Combo";
            phanLoaiTong = "Combo";
+       }
     }
 
   } else if (finalProducts.length > 1) {
@@ -240,14 +260,14 @@ const normalizeProductAlgorithm = (rawName: string) => {
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC (WITH KEY ROTATION) ---
+// --- AI LOGIC (BATCH) ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
   
   let retries = 3;
   while (retries > 0) {
     try {
-      const ai = getAIClient(); // Luôn lấy instance mới nhất (có thể đã đổi key)
+      const ai = getAIClient();
       const prompt = `
         BẠN LÀ DATA NORMALIZER.
         INPUT: Danh sách tên thô.
@@ -269,12 +289,13 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
       });
       return JSON.parse(response.text || "{}");
     } catch (error: any) {
-      // Bắt lỗi 429 (Too Many Requests) hoặc Resource Exhausted
+       // Xử lý lỗi Rate Limit
       if (error.message?.includes('429') || error.message?.includes('RESOURCE_EXHAUSTED') || error.status === 429) {
-         const switched = rotateKey(); // Đổi key
+         const switched = rotateKey();
          if (switched) {
-             console.log("⚠️ 429 Hit. Retrying with new key...");
-             continue; // Thử lại vòng lặp với key mới
+             // console.log("⚠️ 429 Hit. Đổi key và thử lại...");
+             await delay(1000);
+             continue; 
          }
       }
       throw error;
@@ -283,7 +304,7 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   return {};
 };
 
-// --- PHASE 1: RAW EXTRACTION (WITH KEY ROTATION) ---
+// --- PHASE 1: RAW EXTRACTION ---
 export const parseRawProducts = async (
   url: string, 
   htmlHint: string, 
@@ -294,12 +315,12 @@ export const parseRawProducts = async (
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
 
   let retries = 0;
-  const maxRetries = 15; // Tăng số lần thử vì chúng ta có nhiều key
+  const maxRetries = 10; // Thử nhiều lần vì có nhiều key
   let currentDelay = 2000;
 
   while (retries < maxRetries) {
     try {
-      const ai = getAIClient(); // Lấy client với key hiện tại
+      const ai = getAIClient(); // Lấy client (có thể là key mới)
       
       const prompt = `
         EXTRACT PRODUCTS FROM HTML.
@@ -337,11 +358,11 @@ export const parseRawProducts = async (
         const fixedUrl = resolveProductUrl(item.productUrl, url);
         return {
           ...item,
-          normalizedName: item.sanPham,
+          normalizedName: item.sanPham, 
           plCombo: "Raw",
           phanLoaiTong: "Chưa xử lý",
           phanLoaiChiTiet: "Chưa xử lý",
-          productUrl: fixedUrl,
+          productUrl: fixedUrl, 
           url: url,
           sourceIndex,
           status: 'pending' as const
@@ -354,28 +375,27 @@ export const parseRawProducts = async (
       if (isRateLimit) {
         const switched = rotateKey();
         if (switched) {
-             console.log("⚡ Auto-switched API Key due to Rate Limit.");
+             // console.log("⚡ Auto-switched API Key.");
              await delay(1000); 
-             continue; // Thử lại ngay với key mới, không tăng retries
+             continue; // Thử lại ngay với key mới
         } else {
-             // Hết key để đổi, buộc phải chờ
-             console.warn(`⚠️ Rate limit reached and no more keys. Waiting ${currentDelay}ms...`);
+             // Hết key, chờ backoff
+             // console.warn(`⚠️ Hết key dự phòng. Chờ ${currentDelay}ms...`);
              await delay(currentDelay);
              currentDelay *= 1.5;
              retries++;
         }
       } else {
-        // Các lỗi khác thì throw luôn hoặc retry nhẹ
-        console.error("Gemini Error:", error);
-        retries++;
-        await delay(currentDelay);
+         // Lỗi khác (400, 500...)
+         console.error("Gemini Error:", error);
+         throw error;
       }
     }
   }
   return [];
 };
 
-// --- PHASE 2: NORMALIZATION PROCESS (Code or AI) ---
+// --- PHASE 2: NORMALIZATION PROCESS ---
 export const processNormalization = async (
   products: ProductData[],
   method: 'code' | 'ai',

@@ -23,38 +23,25 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
                     ];
                     trashSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
 
-                    // 2. XÓA PHẦN "GỢI Ý CHO BẠN" / "SẢN PHẨM TƯƠNG TỰ" (Shopee/Lazada/Tiki)
-                    
-                    // SHOPEE: Tìm các tiêu đề "Gợi ý", "Tương tự" và xóa section chứa nó
+                    // 2. XÓA PHẦN "GỢI Ý CHO BẠN" / "SẢN PHẨM TƯƠNG TỰ" (Quan trọng)
+                    // Shopee: Tìm các header section có chữ "Gợi ý", "Tương tự" và xóa section đó
                     const headers = clone.querySelectorAll('.shopee-header-section__header__title');
                     headers.forEach(h => {
                         const text = h.innerText.toLowerCase();
                         if (text.includes('gợi ý') || text.includes('tương tự') || text.includes('có thể bạn cũng thích') || text.includes('recommend')) {
                             // Tìm phần tử cha chứa toàn bộ section này để xóa
-                            // Thường là .shopee-header-section hoặc .section-recommend
-                            const section = h.closest('.shopee-header-section') || h.closest('.section-recommend') || h.parentNode.parentNode.parentNode;
+                            const section = h.closest('.shopee-header-section') || h.closest('.section-recommend') || h.parentNode.parentNode;
                             if (section) section.remove();
                         }
                     });
-                    
-                    // Xóa thêm class cụ thể của Shopee Recommendation nếu tìm thấy
-                    const shopeeRec = clone.querySelectorAll('.stardust-tabs-header__tab');
-                    shopeeRec.forEach(tab => {
-                         if(tab.innerText.toLowerCase().includes('gợi ý')) {
-                             const wrapper = tab.closest('.container') || tab.parentNode.parentNode;
-                             if(wrapper) wrapper.remove();
-                         }
-                    });
 
-                    // LAZADA: Xóa phần recommendation (thường nằm trong div id="recommendation")
+                    // Lazada: Xóa phần recommendation (thường nằm trong div id="recommendation")
                     const lazRec = clone.querySelector('[data-spm="recommendation"]');
                     if (lazRec) lazRec.remove();
-                    const lazRec2 = clone.querySelector('.recommend-content');
-                    if (lazRec2) lazRec2.remove();
 
-                    // TIKI: Xóa phần "Sản phẩm tương tự"
+                    // Tiki: Xóa phần "Sản phẩm tương tự"
                     const tikiRec = clone.querySelectorAll('div[data-view-id="product_list_container"]');
-                    // Giữ lại cái đầu tiên (Main List), xóa các cái sau (thường là suggestion)
+                    // Giữ lại cái đầu tiên (Main), xóa các cái sau (thường là suggestion)
                     if (tikiRec.length > 1) {
                          for(let i=1; i<tikiRec.length; i++) tikiRec[i].remove();
                     }
@@ -81,7 +68,7 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
         });
         
         const cleanHtml = result[0].result;
-        console.log("Cleaned HTML size optimized to:", cleanHtml.length);
+        console.log("Cleaned HTML size:", cleanHtml.length);
 
         const tabs = await chrome.tabs.query({});
         const appTab = tabs.find(t => t.title && t.title.includes("Super Scraper Pro"));
@@ -98,7 +85,7 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
                 },
                 args: [cleanHtml, sourceTab.url, sourceTab.title]
             });
-            statusEl.innerText = "✅ Đã gửi xong! (Đã lọc SP thừa)";
+            statusEl.innerText = "✅ Đã gửi xong! (Chỉ lấy SP chính)";
             statusEl.style.color = "green";
         } else {
             statusEl.innerText = "❌ Không tìm thấy tab Super Scraper!";
