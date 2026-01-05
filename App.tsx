@@ -1,12 +1,15 @@
+
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import ScraperTool from './components/ScraperTool';
 import GmvComparator from './components/GmvComparator';
 import VideoAnalytics from './components/VideoAnalytics';
-import { Database, LineChart, Video, LogOut, ChevronRight, Menu } from 'lucide-react';
+import PdfExtractor from './components/PdfExtractor';
+import PriceComparator from './components/PriceComparator';
+import { Database, LineChart, Video, LogOut, ChevronRight, Menu, FileText, TrendingDown } from 'lucide-react';
 
-type Module = 'scraper' | 'gmv' | 'video';
+type Module = 'scraper' | 'gmv' | 'video' | 'pdf' | 'price';
 
 const MainLayout = () => {
     const { currentUser, logout } = useAuth();
@@ -30,10 +33,12 @@ const MainLayout = () => {
                     </button>
 
                     {/* MODULE CONTENT */}
-                    <div className="animate-in fade-in zoom-in duration-300">
+                    <div className="animate-in fade-in zoom-in duration-300 h-full">
                         {activeModule === 'scraper' && <ScraperTool />}
                         {activeModule === 'gmv' && <GmvComparator />}
                         {activeModule === 'video' && <VideoAnalytics />}
+                        {activeModule === 'pdf' && <PdfExtractor />}
+                        {activeModule === 'price' && <PriceComparator />}
                     </div>
                 </div>
             </div>
@@ -83,6 +88,20 @@ const MainLayout = () => {
                     </button>
 
                     <button 
+                        onClick={() => setActiveModule('price')}
+                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'price' ? 'bg-amber-600 text-white shadow-lg shadow-amber-200' : 'hover:bg-slate-50 text-slate-500'}`}
+                    >
+                        <div className={`p-2 rounded-lg ${activeModule === 'price' ? 'bg-white/20' : 'bg-amber-50 text-amber-600 group-hover:bg-white'}`}>
+                            <TrendingDown className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <span className="block text-sm font-bold">Price History</span>
+                            <span className={`text-[10px] ${activeModule === 'price' ? 'text-amber-200' : 'text-slate-400'}`}>So sánh lịch sử Giá</span>
+                        </div>
+                        {activeModule === 'price' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
+                    </button>
+
+                    <button 
                         onClick={() => setActiveModule('video')}
                         className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'video' ? 'bg-rose-600 text-white shadow-lg shadow-rose-200' : 'hover:bg-slate-50 text-slate-500'}`}
                     >
@@ -94,6 +113,20 @@ const MainLayout = () => {
                             <span className={`text-[10px] ${activeModule === 'video' ? 'text-rose-200' : 'text-slate-400'}`}>Chuyển đổi Video</span>
                         </div>
                         {activeModule === 'video' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
+                    </button>
+
+                    <button 
+                        onClick={() => setActiveModule('pdf')}
+                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'pdf' ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'hover:bg-slate-50 text-slate-500'}`}
+                    >
+                        <div className={`p-2 rounded-lg ${activeModule === 'pdf' ? 'bg-white/20' : 'bg-blue-50 text-blue-600 group-hover:bg-white'}`}>
+                            <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <span className="block text-sm font-bold">PDF Extractor AI</span>
+                            <span className={`text-[10px] ${activeModule === 'pdf' ? 'text-blue-200' : 'text-slate-400'}`}>OCR & Convert</span>
+                        </div>
+                        {activeModule === 'pdf' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
                     </button>
                 </div>
 

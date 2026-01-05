@@ -2,18 +2,24 @@
 import * as XLSX from 'xlsx';
 import { ProcessedRow, ProcessingStatus } from '../types';
 
-// Các từ khóa để nhận diện cột
+// Các từ khóa để nhận diện cột (Đã mở rộng để bắt tốt hơn)
 const KEYWORDS = {
-    brand: ['brand', 'thương hiệu', 'nhãn hàng'],
-    category: ['category', 'ngành hàng', 'phân loại', 'nhóm hàng'],
-    product: ['product', 'tên sản phẩm', 'tên sp', 'item name'],
-    revenue: ['gmv', 'doanh thu', 'revenue', 'doanh số'],
-    ignore: ['stt', 'no', 'tổng']
+    brand: ['brand', 'thương hiệu', 'nhãn hàng', 'hãng', 'nhà cung cấp', 'vendor', 'thương hiệu (brand)'],
+    category: ['category', 'ngành hàng', 'phân loại', 'nhóm hàng', 'danh mục', 'type', 'loại'],
+    product: ['product', 'tên sản phẩm', 'tên sp', 'item name', 'tên hàng', 'tên chuẩn hóa', 'tên gốc', 'name', 'product name', 'tên hiển thị', 'tên'],
+    revenue: ['gmv', 'doanh thu', 'revenue', 'doanh số', 'tổng tiền', 'thành tiền', 'total sales', 'sales'],
+    price: ['giá sau voucher', 'giá bán', 'price', 'đơn giá', 'giá', 'final price', 'giá khuyến mãi', 'giá tiền', 'giá giảm', 'unit price'],
+    ignore: ['stt', 'no', 'tổng', 'ghi chú', 'link', 'ảnh', 'image', 'id', 'mã', 'sku', 'code']
 };
 
 const normalizeStr = (str: string) => str.toLowerCase().trim().replace(/\s+/g, ' ');
 
 const findColumn = (headers: string[], keys: string[]): string | null => {
+    // 1. Tìm chính xác (Exact match)
+    const exact = headers.find(h => keys.some(k => normalizeStr(h) === k));
+    if (exact) return exact;
+    
+    // 2. Tìm chứa (Contains)
     return headers.find(h => keys.some(k => normalizeStr(h).includes(k))) || null;
 };
 
@@ -29,7 +35,8 @@ const generateId = (brand: string, name: string) => {
 export const processFiles = async (
     files: File[], 
     mode: 'standard' | 'append' | 'analysis',
-    setStatus: (status: ProcessingStatus) => void
+    setStatus: (status: ProcessingStatus) => void,
+    metric: 'gmv' | 'price' = 'gmv'
 ): Promise<{ rows: ProcessedRow[], columns: string[] }> => {
     
     setStatus({ step: 'reading', message: 'Đang đọc dữ liệu từ files...', progress: 10 });
@@ -50,8 +57,20 @@ export const processFiles = async (
         if (jsonData.length === 0) continue;
         
         // Lấy headers từ dòng đầu tiên
-        const headers = Object.keys(jsonData[0] as object);
-        allData.push({ fileName: file.name, data: jsonData as any[], headers });
+        // Làm sạch header để tránh khoảng trắng thừa gây lỗi
+        const originalHeaders = Object.keys(jsonData[0] as object);
+        const headers = originalHeaders.map(h => h.trim());
+        
+        // Map lại data theo header đã trim
+        const cleanData = jsonData.map((row: any) => {
+            const newRow: any = {};
+            originalHeaders.forEach((h, idx) => {
+                newRow[headers[idx]] = row[h];
+            });
+            return newRow;
+        });
+
+        allData.push({ fileName: file.name, data: cleanData, headers });
     }
 
     if (allData.length === 0) {
@@ -71,22 +90,37 @@ export const processFiles = async (
         const catCol = findColumn(fileObj.headers, KEYWORDS.category);
         const prodCol = findColumn(fileObj.headers, KEYWORDS.product);
         
-        // Xác định các cột dữ liệu (GMV/Tháng)
-        // Loại bỏ cột Brand, Cat, Prod ra khỏi danh sách cột dữ liệu
-        const valueCols = fileObj.headers.filter(h => 
+        // Xác định các cột dữ liệu dựa trên Metric
+        const targetKeywords = metric === 'price' ? KEYWORDS.price : KEYWORDS.revenue;
+        
+        let valueCols = fileObj.headers.filter(h => 
+            findColumn([h], targetKeywords) !== null && 
             h !== brandCol && h !== catCol && h !== prodCol && 
-            !KEYWORDS.ignore.some(ign => normalizeStr(h) === ign)
+            !KEYWORDS.ignore.some(ign => normalizeStr(h).includes(ign))
         );
 
-        // Tên tiền tố cho cột dữ liệu (nếu cần thiết, vd: File 1 là T9, File 2 là T10)
-        // Ở mode Standard: Dùng tên cột gốc hoặc tên file làm suffix
-        
+        // Fallback: Nếu không tìm thấy cột giá trị, thử tìm cột số không phải là text
+        if (valueCols.length === 0) {
+             valueCols = fileObj.headers.filter(h => {
+                if (h === brandCol || h === catCol || h === prodCol) return false;
+                if (KEYWORDS.ignore.some(ign => normalizeStr(h).includes(ign))) return false;
+                // Check sample data
+                const sampleVal = fileObj.data[0]?.[h];
+                return typeof sampleVal === 'number' || (typeof sampleVal === 'string' && /^[0-9.,]+$/.test(sampleVal));
+             });
+        }
+
+        // Tên file rút gọn để làm hậu tố cột (T8, T9...)
+        // Lấy tên file bỏ đuôi .xlsx
+        const fileShortName = fileObj.fileName.replace(/\.[^/.]+$/, "").substring(0, 20); 
+
         fileObj.data.forEach((row) => {
             const brand = brandCol ? String(getCellValue(row, brandCol) || 'Khác') : 'Khác';
             const category = catCol ? String(getCellValue(row, catCol) || 'Khác') : 'Khác';
             const productName = prodCol ? String(getCellValue(row, prodCol) || '') : '';
             
-            if (!productName) return; // Bỏ qua dòng ko có tên SP
+            // Nếu không có tên sản phẩm, bỏ qua dòng này
+            if (!productName || productName.trim() === '') return;
 
             const id = generateId(brand, productName);
 
@@ -98,7 +132,6 @@ export const processFiles = async (
                     productName
                 };
             } else {
-                // Update missing info if available (e.g. from Master file)
                 if (mergedMap[id].brand === 'Khác' && brand !== 'Khác') mergedMap[id].brand = brand;
                 if (mergedMap[id].category === 'Khác' && category !== 'Khác') mergedMap[id].category = category;
             }
@@ -106,22 +139,35 @@ export const processFiles = async (
             // Merge values
             valueCols.forEach(col => {
                 let val = getCellValue(row, col);
-                // Cố gắng parse số
+                
+                // Parse số an toàn hơn cho tiền tệ Việt Nam (100.000 -> 100000)
                 if (typeof val === 'string') {
-                    val = parseFloat(val.replace(/[,.]/g, '')); // Xử lý 1.000.000 hoặc 1,000,000
+                    // Giữ lại số và dấu chấm/phẩy, bỏ chữ
+                    val = parseFloat(val.replace(/[^0-9]/g, '')); 
                 }
-                if (isNaN(val)) val = 0;
+                if (isNaN(val) || val === null) val = 0;
 
-                // Logic đặt tên cột
-                // Nếu Standard: Nếu cột tên là "GMV" -> đổi thành "GMV_{FileName}" hoặc giữ nguyên nếu file đã đặt tên cột là "T9"
-                let finalColName = col;
-                if (files.length > 1 && normalizeStr(col).includes('gmv')) {
-                    // Nếu nhiều file và cột chỉ tên là GMV -> Gắn tên file vào để phân biệt
-                    const fileShortName = fileObj.fileName.replace(/\.[^/.]+$/, ""); // remove extension
-                    finalColName = `${col} (${fileShortName})`;
+                // Logic đặt tên cột:
+                // Nếu nhiều file -> Dùng tên file làm tên cột (VD: Tháng 8, Tháng 9)
+                // Nếu 1 file -> Giữ nguyên tên cột gốc
+                let finalColName = files.length > 1 ? fileShortName : col;
+                
+                // Aggregate Logic
+                if (metric === 'price') {
+                    // Với GIÁ: Lấy MIN > 0
+                    if (val > 0) {
+                        const currentVal = mergedMap[id][finalColName];
+                        if (currentVal === undefined || currentVal === 0) {
+                            mergedMap[id][finalColName] = val;
+                        } else {
+                            mergedMap[id][finalColName] = Math.min(currentVal, val);
+                        }
+                    }
+                } else {
+                    // Với GMV: Cộng dồn (SUM)
+                    mergedMap[id][finalColName] = (mergedMap[id][finalColName] || 0) + val;
                 }
                 
-                mergedMap[id][finalColName] = (mergedMap[id][finalColName] || 0) + val;
                 dynamicColumns.add(finalColName);
             });
         });
@@ -129,9 +175,21 @@ export const processFiles = async (
 
     setStatus({ step: 'completed', message: 'Hoàn tất!', progress: 100 });
     
-    // FIX: Không dùng .sort() để giữ nguyên thứ tự cột như trong file Excel (T9 -> T12)
+    // Convert Set to Array and KEEP ORDER based on File Order if multiple files
+    let sortedColumns = Array.from(dynamicColumns);
+    
+    if (files.length > 1) {
+        const fileNames = allData.map(f => f.fileName.replace(/\.[^/.]+$/, "").substring(0, 20));
+        sortedColumns.sort((a, b) => {
+            const idxA = fileNames.indexOf(a);
+            const idxB = fileNames.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            return a.localeCompare(b);
+        });
+    }
+
     return {
         rows: Object.values(mergedMap),
-        columns: Array.from(dynamicColumns) 
+        columns: sortedColumns
     };
 };
