@@ -15,6 +15,9 @@ export default defineConfig(({ mode }) => {
       // Inject key vào client code
       'process.env.API_KEY': JSON.stringify(apiKey),
     },
+    build: {
+      target: 'esnext', // Quan trọng: Hỗ trợ cú pháp mới nhất cho pdfjs-dist
+    },
     server: {
       port: 3000
     }
