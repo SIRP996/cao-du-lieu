@@ -1,6 +1,18 @@
 
 import { db } from '../firebase/config';
 import { ProductData, TrackingProduct, SourceConfig, Project } from '../types';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  query, 
+  where,
+  addDoc 
+} from 'firebase/firestore';
 
 // Tên collection trong Firestore
 const COLLECTION_PRODUCTS = 'tracked_products';
@@ -26,9 +38,8 @@ const compressHtmlForStorage = (html: string): string => {
 export const getUserProjects = async (userId: string): Promise<Project[]> => {
   if (!userId) return [];
   try {
-    const snapshot = await db.collection(COLLECTION_PROJECTS)
-      .where("userId", "==", userId)
-      .get();
+    const q = query(collection(db, COLLECTION_PROJECTS), where("userId", "==", userId));
+    const snapshot = await getDocs(q);
     
     const projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
 
@@ -48,7 +59,7 @@ export const getUserProjects = async (userId: string): Promise<Project[]> => {
  * Tạo dự án mới
  */
 export const createProject = async (userId: string, projectName: string): Promise<Project> => {
-  const newProjectRef = db.collection(COLLECTION_PROJECTS).doc();
+  const newProjectRef = doc(collection(db, COLLECTION_PROJECTS));
   const projectData: Project = {
     id: newProjectRef.id,
     name: projectName,
@@ -57,7 +68,7 @@ export const createProject = async (userId: string, projectName: string): Promis
     productCount: 0,
     sources: []
   };
-  await newProjectRef.set(projectData);
+  await setDoc(newProjectRef, projectData);
   return projectData;
 };
 
@@ -66,7 +77,7 @@ export const createProject = async (userId: string, projectName: string): Promis
  */
 export const updateProject = async (projectId: string, newName: string) => {
     if (!projectId || !newName) return;
-    await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
+    await updateDoc(doc(db, COLLECTION_PROJECTS, projectId), {
         name: newName
     });
 };
@@ -76,8 +87,8 @@ export const updateProject = async (projectId: string, newName: string) => {
  */
 export const deleteProject = async (projectId: string) => {
     if (!projectId) return;
-    await db.collection(COLLECTION_PROJECTS).doc(projectId).delete();
-    await db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId).delete();
+    await deleteDoc(doc(db, COLLECTION_PROJECTS, projectId));
+    await deleteDoc(doc(db, COLLECTION_WORKSPACE_DATA, projectId));
 };
 
 /**
@@ -95,24 +106,24 @@ export const syncProjectWorkspace = async (
         htmlHint: compressHtmlForStorage(src.htmlHint)
     }));
 
-    await db.collection(COLLECTION_PROJECTS).doc(projectId).update({
+    await updateDoc(doc(db, COLLECTION_PROJECTS, projectId), {
         sources: optimizedSources,
         productCount: results.length,
         lastSyncedAt: new Date().toISOString()
     });
 
-    const workspaceRef = db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId);
+    const workspaceRef = doc(db, COLLECTION_WORKSPACE_DATA, projectId);
     
     if (results.length > 0) {
         try {
-            await workspaceRef.set({
+            await setDoc(workspaceRef, {
                 results: results,
                 updatedAt: new Date().toISOString()
             });
         } catch (e: any) {
             if (e.code === 'invalid-argument' && e.message.includes('exceeds the maximum size')) {
                 console.warn("Results quá lớn, lưu bản rút gọn...");
-                await workspaceRef.set({
+                await setDoc(workspaceRef, {
                     results: results.slice(0, 500),
                     updatedAt: new Date().toISOString(),
                     note: "Data truncated due to size limit"
@@ -122,7 +133,7 @@ export const syncProjectWorkspace = async (
             }
         }
     } else {
-        await workspaceRef.set({ results: [], updatedAt: new Date().toISOString() });
+        await setDoc(workspaceRef, { results: [], updatedAt: new Date().toISOString() });
     }
 };
 
@@ -132,11 +143,11 @@ export const syncProjectWorkspace = async (
 export const getProjectWorkspace = async (projectId: string) => {
     if (!projectId) return { sources: null, results: [] };
 
-    const projDoc = await db.collection(COLLECTION_PROJECTS).doc(projectId).get();
+    const projDoc = await getDoc(doc(db, COLLECTION_PROJECTS, projectId));
     const projData = projDoc.data() as Project;
     
-    const wsDoc = await db.collection(COLLECTION_WORKSPACE_DATA).doc(projectId).get();
-    const wsData = wsDoc.exists ? wsDoc.data() : { results: [] };
+    const wsDoc = await getDoc(doc(db, COLLECTION_WORKSPACE_DATA, projectId));
+    const wsData = wsDoc.exists() ? wsDoc.data() : { results: [] };
 
     return {
         sources: projData?.sources || null,
@@ -174,10 +185,10 @@ export const saveScrapedDataToFirestore = async (
     const safeName = btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 30);
     const productId = `PROD_${projectId}_${safeName}`;
     
-    const productRef = db.collection(COLLECTION_PRODUCTS).doc(productId);
+    const productRef = doc(db, COLLECTION_PRODUCTS, productId);
     
-    const docSnap = await productRef.get();
-    let existingData: any = docSnap.exists ? docSnap.data() : null;
+    const docSnap = await getDoc(productRef);
+    let existingData: any = docSnap.exists() ? docSnap.data() : null;
 
     const sourcesUpdate: Record<string, any> = existingData ? { ...existingData.sources } : {};
 
@@ -235,7 +246,7 @@ export const saveScrapedDataToFirestore = async (
         searchName: name.toLowerCase()
     };
 
-    await productRef.set(productPayload, { merge: true });
+    await setDoc(productRef, productPayload, { merge: true });
     
     processed++;
     if (onProgress) onProgress(processed, total);
@@ -248,13 +259,13 @@ export const saveScrapedDataToFirestore = async (
 export const getTrackedProducts = async (userId: string, projectId?: string): Promise<TrackingProduct[]> => {
     if (!userId) return [];
     
-    let query = db.collection(COLLECTION_PRODUCTS).where("userId", "==", userId);
+    let q = query(collection(db, COLLECTION_PRODUCTS), where("userId", "==", userId));
     
     if (projectId) {
-        query = query.where("projectId", "==", projectId);
+        q = query(q, where("projectId", "==", projectId));
     }
     
-    const querySnapshot = await query.get();
+    const querySnapshot = await getDocs(q);
     
     return querySnapshot.docs.map(doc => {
         const data = doc.data();

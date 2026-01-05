@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { ProductData } from "../types";
+import { ProductData, StoreResult } from "../types";
 
 // --- KEY ROTATION SYSTEM ---
 
@@ -148,74 +148,56 @@ const OFFICIAL_NAMES = [
   "Son dưỡng dầu dừa Bến Tre 5g"
 ];
 
-// --- HELPERS ---
+// --- HELPER: Process URL/Slug ---
 const slugify = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
+  if (!rawUrl) return baseUrl;
+  try { return new URL(rawUrl, baseUrl).href; } catch (e) { return rawUrl; }
+};
 
-// --- NEW OPTIMIZED HTML CLEANER (RESOURCE SAVER) ---
+// --- PRE-PROCESS HTML ---
 const preProcessHtml = (rawHtml: string): string => {
   if (!rawHtml) return "";
-  
-  // 1. Cắt bớt phần thừa thãi (Script, Style, SVG, Comment)
   let clean = rawHtml
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gim, "")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gim, "")
-    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gim, "") // SVG rất tốn token
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gim, "")
     .replace(/<!--[\s\S]*?-->/g, "");
 
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(clean, 'text/html');
-    
-    // 2. Xóa các thẻ không chứa thông tin sản phẩm
     const trashTags = ['iframe', 'noscript', 'meta', 'link', 'head', 'footer', 'header', 'nav', 'form', 'button', 'input', 'select', 'option'];
     trashTags.forEach(tag => doc.querySelectorAll(tag).forEach(el => el.remove()));
 
-    // 3. Xóa các class/id thường chứa "Sản phẩm tương tự" hoặc "Gợi ý" để tránh cào nhầm
-    // Hasaki/Shopee/TikTok specific blacklist
     const blacklistSelectors = [
         '[class*="recommend"]', '[id*="recommend"]', 
         '[class*="suggestion"]', '[id*="suggestion"]',
         '.footer', '#footer', '.header', '#header',
-        'video', 'canvas', '.xgplayer-container', // TikTok junk
+        'video', 'canvas', '.xgplayer-container',
         '[data-e2e="video-container"]', '[data-e2e="live-room-container"]'
     ];
     blacklistSelectors.forEach(sel => doc.querySelectorAll(sel).forEach(el => el.remove()));
 
-    // 4. SIÊU NÉN: Loại bỏ TẤT CẢ attributes trừ href và src
-    // Giúp giảm 60% dung lượng token mà vẫn giữ được cấu trúc và link/ảnh
     const allElements = doc.body.getElementsByTagName("*");
     for (let i = 0; i < allElements.length; i++) {
         const el = allElements[i];
-        const keepAttrs = ['href', 'src']; // Chỉ giữ lại link và ảnh
-        
-        // Convert to array to avoid iterator issues while removing
+        const keepAttrs = ['href', 'src'];
         const attrsToRemove = [];
         for (let j = 0; j < el.attributes.length; j++) {
             const attrName = el.attributes[j].name;
-            if (!keepAttrs.includes(attrName)) {
-                attrsToRemove.push(attrName);
-            }
+            if (!keepAttrs.includes(attrName)) attrsToRemove.push(attrName);
         }
-        
         attrsToRemove.forEach(attr => el.removeAttribute(attr));
-        
-        // Xóa ảnh base64 dài ngoằng (tiết kiệm token cực lớn)
         if (el.hasAttribute('src') && el.getAttribute('src')?.startsWith('data:image')) {
             el.removeAttribute('src');
         }
     }
-
-    return doc.body.innerHTML.replace(/\s\s+/g, ' '); // Xóa khoảng trắng thừa
+    return doc.body.innerHTML.replace(/\s\s+/g, ' ');
   } catch (e) { 
-      return clean.substring(0, 100000); // Fallback
+      return clean.substring(0, 100000);
   }
-};
-
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
-  if (!rawUrl) return baseUrl;
-  try { return new URL(rawUrl, baseUrl).href; } catch (e) { return rawUrl; }
 };
 
 const extractQuantity = (rawName: string): number => {
@@ -308,7 +290,6 @@ const normalizeProductAlgorithm = (rawName: string) => {
   return { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet };
 };
 
-// --- AI LOGIC WITH RETRY & ROTATION ---
 const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   if (rawNames.length === 0) return {};
   
@@ -338,11 +319,10 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
       return JSON.parse(response.text || "{}");
     } catch (error: any) {
       const msg = String(error.message || error);
-      // Bắt lỗi quota hoặc lỗi key để đổi key
       if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key') || msg.includes('MISSING_API_KEY')) {
          if (rotateKey()) {
              await delay(1000);
-             continue; // Thử lại với key mới
+             continue;
          }
       }
       throw error;
@@ -351,14 +331,12 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
   return {};
 };
 
-// --- PHASE 1: RAW EXTRACTION WITH RETRY & ROTATION ---
 export const parseRawProducts = async (
   url: string, 
   htmlHint: string, 
   sourceIndex: number
 ): Promise<Partial<ProductData>[]> => {
   const model = "gemini-3-flash-preview";
-  // Sử dụng hàm nén HTML mới siêu mạnh
   const cleanHtmlInput = preProcessHtml(htmlHint);
   
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
@@ -366,8 +344,6 @@ export const parseRawProducts = async (
   let retries = 0;
   const maxRetries = 15;
   let currentDelay = 2000;
-
-  // Giới hạn độ dài input xuống còn 200k ký tự sau khi đã nén để tránh lỗi Context quá lớn
   const safeHtml = cleanHtmlInput.substring(0, 200000);
 
   while (retries < maxRetries) {
@@ -375,18 +351,14 @@ export const parseRawProducts = async (
       const ai = getAIClient();
       const prompt = `
         TASK: Extract MAIN PRODUCT LIST from HTML.
-        
         CRITICAL RULES:
         1. ONLY extract products from the MAIN GRID/LIST.
-        2. IGNORE "Recommended", "Suggestions", "Similar Products", "Seen Recently" (Gợi ý, Tương tự, Đã xem).
-        3. IGNORE Footer items or Sidebar promotions.
-        4. Focus on elements containing Image + Title + Price.
+        2. IGNORE "Recommended", "Suggestions".
+        3. Focus on Image + Title + Price.
         
         Input URL: ${url}
-        
         Return JSON Array: [{sanPham, gia, productUrl}]
-        
-        HTML (Simplified): ${safeHtml}
+        HTML: ${safeHtml}
       `;
       
       const response = await ai.models.generateContent({
@@ -439,7 +411,6 @@ export const parseRawProducts = async (
       
       if (isKeyError) {
         if (rotateKey()) {
-             // Đổi key thành công, thử lại ngay
              await delay(1000); 
              continue;
         } else {
@@ -455,63 +426,162 @@ export const parseRawProducts = async (
   return [];
 };
 
-// --- PHASE 2: NORMALIZATION PROCESS ---
-export const processNormalization = async (
-  products: ProductData[],
-  method: 'code' | 'ai',
-  onProgress?: (percent: number) => void
-): Promise<ProductData[]> => {
-  const model = "gemini-3-flash-preview";
-  let resultProducts: ProductData[] = [];
+// --- NEW FUNCTION: SEARCH LOCAL STORES WITH GOOGLE GROUNDING ---
+export const searchLocalStoresWithGemini = async (
+  productName: string,
+  location: string
+): Promise<StoreResult[]> => {
+  const ai = getAIClient();
+  const model = "gemini-2.5-flash"; // Use 2.5 Flash for Grounding
   
-  if (method === 'code') {
-    const chunkSize = 50; 
-    for (let i = 0; i < products.length; i += chunkSize) {
-      const chunk = products.slice(i, i + chunkSize);
-      const processedChunk = chunk.map(item => {
-        const normInfo = normalizeProductAlgorithm(item.sanPham);
-        return { ...item, ...normInfo, status: 'success' } as ProductData;
-      });
-      resultProducts = [...resultProducts, ...processedChunk];
-      if (onProgress) {
-        const percent = Math.round(((i + chunk.length) / products.length) * 100);
-        onProgress(percent);
+  const query = `Tìm cửa hàng bán "${productName}" tại "${location}".`;
+  
+  const prompt = `
+    Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.
+    Nhiệm vụ: Tìm các cửa hàng, nhà thuốc, hoặc website đang bán sản phẩm "${productName}" ở khu vực "${location}".
+    
+    YÊU CẦU QUAN TRỌNG:
+    1. Sử dụng công cụ Google Search để tìm dữ liệu thực tế (Real-time).
+    2. Cố gắng tìm ít nhất 10-20 kết quả nếu có thể.
+    3. Ưu tiên lấy Link chi tiết sản phẩm (Direct Product URL) thay vì trang chủ.
+    4. Trả về kết quả dưới dạng JSON Array (Strict JSON).
+    
+    Cấu trúc JSON mong muốn:
+    [
+      {
+        "storeName": "Tên cửa hàng",
+        "address": "Địa chỉ cụ thể (nếu có)",
+        "priceEstimate": "Giá tham khảo (nếu thấy, ví dụ: '150.000đ', hoặc 'Liên hệ')",
+        "websiteTitle": "Tiêu đề trang web nguồn",
+        "link": "URL dẫn đến nơi bán (Ưu tiên link sản phẩm)",
+        "phone": "Số điện thoại (nếu có)",
+        "email": "Email liên hệ (nếu tìm thấy trên web/footer)", 
+        "isOpen": "Giờ mở cửa (nếu có)"
       }
-      await delay(10);
-    }
-    return resultProducts;
+    ]
+    
+    Nếu không tìm thấy giá cụ thể, hãy ghi "Xem chi tiết".
+    Nếu không có địa chỉ cụ thể (shop online), hãy ghi "Online".
+    Cố gắng tìm thêm Email nếu có thể.
+  `;
 
-  } else {
-    const batchSize = 30;
-    for (let i = 0; i < products.length; i += batchSize) {
-      const batch = products.slice(i, i + batchSize);
-      const rawNames = batch.map(p => p.sanPham);
-      try {
-        const normalizedMap = await normalizeBatchWithAI(rawNames, model);
-        const processedBatch = batch.map(item => {
-          const normInfo = normalizedMap[item.sanPham] || {};
-          return {
-            ...item,
-            normalizedName: normInfo.normalizedName || item.sanPham,
-            plCombo: normInfo.plCombo || (item.sanPham.toLowerCase().includes('combo') ? 'Combo' : 'Lẻ'),
-            phanLoaiTong: normInfo.phanLoaiTong || "Khác",
-            phanLoaiChiTiet: normInfo.phanLoaiChiTiet || "Khác",
-            status: 'success'
-          } as ProductData;
-        });
-        resultProducts = [...resultProducts, ...processedBatch];
-        if (onProgress) {
-            const percent = Math.round(((i + batch.length) / products.length) * 100);
-            onProgress(percent);
-        }
-        await delay(500); 
-      } catch (e: any) {
-        console.error("Batch error", e);
-        const msg = String(e.message || e);
-        if (msg.includes("MISSING_API_KEY")) throw e;
-        resultProducts = [...resultProducts, ...batch.map(p => ({...p, status: 'error'} as ProductData))];
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }], // ENABLE GOOGLE SEARCH GROUNDING
+        // DO NOT use responseMimeType: 'application/json' with tools
       }
+    });
+
+    const text = response.text || "[]";
+    
+    // Attempt to extract JSON from the text response
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    const cleanJson = jsonMatch ? jsonMatch[0] : "[]";
+    
+    try {
+        const data = JSON.parse(cleanJson);
+        return data.map((item: any, idx: number) => ({
+            id: `store_${idx}_${Math.random().toString(36).substr(2,5)}`,
+            ...item
+        }));
+    } catch (e) {
+        console.error("JSON Parse Error form Search:", e);
+        return [];
     }
-    return resultProducts;
+
+  } catch (error: any) {
+     const msg = String(error.message || error);
+     if (msg.includes('429') || msg.includes('400') || msg.includes('API key')) {
+         if (rotateKey()) {
+             // Retry once with new key
+             return searchLocalStoresWithGemini(productName, location);
+         }
+     }
+     console.error("Store Search Error:", error);
+     throw error;
+  }
+};
+
+export const processNormalization = async (
+  items: ProductData[],
+  method: 'code' | 'ai',
+  onProgress: (percent: number) => void
+): Promise<ProductData[]> => {
+  if (items.length === 0) return [];
+  const total = items.length;
+  let processed = 0;
+
+  if (method === 'code') {
+    return items.map((item) => {
+      const { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet } = normalizeProductAlgorithm(item.sanPham);
+      processed++;
+      onProgress(Math.round((processed / total) * 100));
+      return {
+        ...item,
+        normalizedName,
+        plCombo,
+        phanLoaiTong,
+        phanLoaiChiTiet,
+        status: 'success'
+      };
+    });
+  } else {
+    // AI Method
+    const BATCH_SIZE = 10; // Keep small to avoid huge prompts
+    const results: ProductData[] = [...items];
+    const model = "gemini-3-flash-preview";
+
+    for (let i = 0; i < total; i += BATCH_SIZE) {
+      const batch = results.slice(i, i + BATCH_SIZE);
+      const rawNames = batch.map(b => b.sanPham);
+      
+      try {
+        const aiMap = await normalizeBatchWithAI(rawNames, model);
+        
+        for (let j = 0; j < batch.length; j++) {
+            const itemIndex = i + j;
+            const originalName = results[itemIndex].sanPham;
+            const aiData = aiMap[originalName];
+            
+            if (aiData) {
+                results[itemIndex] = {
+                    ...results[itemIndex],
+                    normalizedName: aiData.normalizedName || originalName,
+                    plCombo: aiData.plCombo || "Lẻ",
+                    phanLoaiTong: aiData.phanLoaiTong || "Khác",
+                    phanLoaiChiTiet: aiData.phanLoaiChiTiet || "Khác",
+                    status: 'success'
+                };
+            } else {
+                // Fallback
+                const fallback = normalizeProductAlgorithm(originalName);
+                results[itemIndex] = {
+                    ...results[itemIndex],
+                    ...fallback,
+                    status: 'success'
+                };
+            }
+        }
+      } catch (e) {
+         console.warn("Batch AI Error, fallback to code:", e);
+         for (let j = 0; j < batch.length; j++) {
+            const itemIndex = i + j;
+            const fallback = normalizeProductAlgorithm(results[itemIndex].sanPham);
+            results[itemIndex] = {
+                 ...results[itemIndex],
+                 ...fallback,
+                 status: 'success'
+            };
+         }
+      }
+
+      processed += batch.length;
+      onProgress(Math.min(Math.round((processed / total) * 100), 100));
+      await delay(1000); 
+    }
+    return results;
   }
 };

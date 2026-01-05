@@ -1,6 +1,5 @@
 
 import { ProductData, TrackingProduct, SourceConfig, DailyHistory, PriceLog } from "../types";
-import { db } from '../firebase/config';
 import { parseRawProducts } from './geminiScraper'; // Dùng lại hàm AI bóc tách giá
 
 const TRACKING_STORAGE_KEY = 'super_scraper_tracking_db_v1';

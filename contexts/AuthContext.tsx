@@ -1,11 +1,18 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { auth, googleProvider } from '../firebase/config';
-import firebase from 'firebase/compat/app';
+import { 
+  signInWithPopup, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  User
+} from 'firebase/auth';
 import { Loader2, ShieldCheck, AlertTriangle } from 'lucide-react';
 
 interface AuthContextType {
-  currentUser: firebase.User | null;
+  currentUser: User | null;
   loading: boolean;
   loginGoogle: () => Promise<void>;
   loginEmail: (e: string, p: string) => Promise<void>;
@@ -20,7 +27,7 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<firebase.User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [longLoading, setLongLoading] = useState(false);
 
@@ -32,7 +39,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => setLoading(false), 2000); 
     }, 8000);
 
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       setLoading(false);
       clearTimeout(safetyTimer);
@@ -41,19 +48,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const loginGoogle = async () => {
-    await auth.signInWithPopup(googleProvider);
+    await signInWithPopup(auth, googleProvider);
   };
 
   const loginEmail = async (email: string, pass: string) => {
-    await auth.signInWithEmailAndPassword(email, pass);
+    await signInWithEmailAndPassword(auth, email, pass);
   };
 
   const signupEmail = async (email: string, pass: string) => {
-    await auth.createUserWithEmailAndPassword(email, pass);
+    await createUserWithEmailAndPassword(auth, email, pass);
   };
 
   const logout = async () => {
-    await auth.signOut();
+    await signOut(auth);
   };
 
   const value = {

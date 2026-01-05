@@ -1,8 +1,8 @@
 
-import firebase from 'firebase/compat/app';
-import 'firebase/compat/auth';
-import 'firebase/compat/firestore';
-import 'firebase/compat/analytics';
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+import { getAnalytics, isSupported } from 'firebase/analytics';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -15,13 +15,20 @@ const firebaseConfig = {
   measurementId: "G-HWQKMXLE6C"
 };
 
-// Initialize Firebase (Check if already initialized for HMR)
-const app = !firebase.apps.length ? firebase.initializeApp(firebaseConfig) : firebase.app();
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
 
-// Initialize services (v8 instances)
-export const auth = firebase.auth();
-export const googleProvider = new firebase.auth.GoogleAuthProvider();
-export const db = firebase.firestore();
-export const analytics = firebase.analytics();
+// Initialize services (Modular SDK)
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+export const db = getFirestore(app);
+
+// Initialize Analytics conditionally
+export let analytics = null;
+isSupported().then((supported) => {
+  if (supported) {
+    analytics = getAnalytics(app);
+  }
+}).catch(console.error);
 
 export default app;

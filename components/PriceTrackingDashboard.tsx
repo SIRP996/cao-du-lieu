@@ -20,7 +20,13 @@ const AUTO_SCAN_INTERVAL_MINUTES = 60; // Quét thật mỗi 60 phút (theo yêu
 // --- HELPER COMPONENTS ---
 const MiniSparkline = ({ history, color }: { history: any[], color: string }) => {
     if (!history || history.length < 2) return <div className="h-8 w-16 bg-slate-700/30 rounded opacity-30"></div>;
-    const prices = history.slice(-7).map(h => h.avgPrice || h.price);
+    
+    // Safety check for map
+    const prices = history.map(h => {
+        const val = h.avgPrice !== undefined ? h.avgPrice : h.price;
+        return typeof val === 'number' ? val : 0;
+    });
+
     const min = Math.min(...prices);
     const max = Math.max(...prices);
     const range = max - min || 1;
@@ -40,19 +46,29 @@ const MiniSparkline = ({ history, color }: { history: any[], color: string }) =>
 };
 
 const PriceCell = ({ data }: { data: any }) => {
+    // 1. Kiểm tra data gốc có tồn tại không
     if (!data) return <div className="text-center text-slate-600 font-mono">-</div>;
     
-    const currentPrice = data.price;
-    const history = data.history || [];
-    const prevPrice = history.length > 1 ? history[history.length - 2].avgPrice : currentPrice;
+    // 2. SAFE GUARD: Ép kiểu về số, nếu null/undefined/string rác -> về 0
+    const currentPrice = typeof data.price === 'number' ? data.price : 0;
+    
+    // 3. Xử lý lịch sử an toàn
+    const history = Array.isArray(data.history) ? data.history : [];
+    
+    // Lấy giá cũ an toàn
+    let prevPrice = currentPrice;
+    if (history.length > 1) {
+        const prevItem = history[history.length - 2];
+        if (prevItem) {
+            // Ưu tiên avgPrice, fallback về price, fallback về 0
+            prevPrice = (typeof prevItem.avgPrice === 'number' ? prevItem.avgPrice : (prevItem.price || 0));
+        }
+    }
     
     const diff = currentPrice - prevPrice;
     const percent = prevPrice > 0 ? (diff / prevPrice) * 100 : 0;
     
-    // Logic màu mới cho Dark Mode:
-    // Tăng -> Xanh (Emerald 400)
-    // Giảm -> Đỏ (Rose 400)
-    // Không đổi -> Vàng (Yellow 400)
+    // Logic màu mới cho Dark Mode
     let colorClass = '';
     let arrowIcon = null;
     let containerClass = '';
@@ -70,7 +86,7 @@ const PriceCell = ({ data }: { data: any }) => {
     } else {
         // KHÔNG ĐỔI
         colorClass = 'text-yellow-400';
-        containerClass = 'bg-yellow-500/5 border-yellow-500/10'; // Nền vàng rất nhẹ
+        containerClass = 'bg-yellow-500/5 border-yellow-500/10'; 
         arrowIcon = <Minus className="w-3 h-3 text-yellow-500/50" />;
     }
 
@@ -78,6 +94,7 @@ const PriceCell = ({ data }: { data: any }) => {
         <div className={`flex flex-col items-end justify-center p-2.5 rounded-xl border transition-all duration-300 ${containerClass}`}>
             <div className={`text-[13px] font-black tracking-tighter flex items-center gap-1.5 ${colorClass}`}>
                 {arrowIcon}
+                {/* 4. SAFE RENDER: Chỉ gọi toLocaleString trên số đã clean */}
                 {currentPrice.toLocaleString()}đ
             </div>
             {diff !== 0 ? (
@@ -162,7 +179,12 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
 
   const sourceColumns = useMemo(() => {
       const sources = new Set<string>();
-      localData.forEach(p => Object.keys(p.sources).forEach(s => sources.add(s)));
+      // Safety check for sources object
+      localData.forEach(p => {
+          if (p.sources) {
+              Object.keys(p.sources).forEach(s => sources.add(s));
+          }
+      });
       
       const priority = ['shopee', 'lazada', 'tiki', 'tiktok', 'web'];
       
@@ -181,7 +203,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
       
       {/* SCANNING TOAST (NON-BLOCKING) */}
       {isScanning && (
-          <div className="fixed bottom-6 right-6 z-[100] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300 pointer-events-auto">
+          <div className="fixed bottom-6 right-6 z-[100] bg-white/95 backdrop-blur-md rounded-xl shadow-2xl border border-indigo-100 p-5 w-80 animate-in slide-in-from-right duration-300 pointer-events-auto">
               <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                       <div className="relative">
@@ -208,9 +230,9 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
       )}
 
       {/* HEADER CONTROL */}
-      <div className="sticky top-0 z-50 bg-[#1e293b]/90 backdrop-blur-md p-4 rounded-3xl border border-slate-700 shadow-2xl mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="sticky top-0 z-50 bg-[#1e293b]/90 backdrop-blur-md p-4 rounded-xl border border-slate-700 shadow-2xl mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-4 w-full md:w-auto">
-            <button onClick={onBack} className="p-3 hover:bg-slate-700 rounded-2xl transition-colors">
+            <button onClick={onBack} className="p-3 hover:bg-slate-700 rounded-xl transition-colors">
                 <ArrowLeft className="w-5 h-5 text-slate-400" />
             </button>
             <div>
@@ -267,7 +289,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
       </div>
 
       {/* MATRIX TABLE */}
-      <div className="bg-[#1e293b] rounded-[2rem] border border-slate-700 shadow-2xl overflow-hidden min-h-[600px]">
+      <div className="bg-[#1e293b] rounded-xl border border-slate-700 shadow-2xl overflow-hidden min-h-[600px]">
           <div className="overflow-x-auto custom-scrollbar">
             <table className="w-full text-left border-collapse min-w-[1200px]">
                 <thead>
@@ -284,7 +306,8 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                 </thead>
                 <tbody className="divide-y divide-slate-700/50 text-sm">
                     {filteredData.map((product) => {
-                        const totalChanges = (Object.values(product.sources) as TrackingSourceData[]).reduce((acc, src) => {
+                        const productSources = product.sources || {};
+                        const totalChanges = (Object.values(productSources) as TrackingSourceData[]).reduce((acc, src) => {
                             const uniquePrices = new Set((src.history || []).map((h: any) => h.avgPrice || h.price));
                             return acc + (uniquePrices.size - 1 > 0 ? uniquePrices.size - 1 : 0);
                         }, 0);
@@ -302,9 +325,8 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
 
                                 {sourceColumns.map((colKey, i) => {
                                     // Tìm key chính xác trong product.sources (phân biệt hoa thường)
-                                    // Vì colKey có thể là "Lazada" nhưng trong DB cũ là "lazada", hoặc ngược lại
-                                    const actualKey = Object.keys(product.sources).find(k => k.toLowerCase() === colKey.toLowerCase()) || colKey;
-                                    const sourceData = product.sources[actualKey];
+                                    const actualKey = Object.keys(productSources).find(k => k.toLowerCase() === colKey.toLowerCase()) || colKey;
+                                    const sourceData = productSources[actualKey];
                                     return (
                                         <td key={i} className="p-4 border-l border-slate-700/50 bg-slate-800/10">
                                             <PriceCell data={sourceData} />
@@ -315,7 +337,7 @@ const PriceTrackingDashboard: React.FC<Props> = ({ data, onBack, isLoading: pare
                                 <td className="p-4 text-center border-l border-slate-700/50">
                                     <div className="flex justify-center">
                                         <MiniSparkline 
-                                            history={(Object.values(product.sources) as TrackingSourceData[])[0]?.history || []} 
+                                            history={(Object.values(productSources) as TrackingSourceData[])[0]?.history || []} 
                                             color="#6366f1" 
                                         />
                                     </div>

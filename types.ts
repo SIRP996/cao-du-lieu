@@ -28,6 +28,20 @@ export enum AppStatus {
   ERROR = 'ERROR'
 }
 
+// --- STORE FINDER TYPES (NEW) ---
+export interface StoreResult {
+  id: string;
+  storeName: string;
+  address: string;
+  province?: string; // NEW: Tỉnh/Thành phố
+  priceEstimate: string; // Giá dạng text vì Google trả về nhiều kiểu
+  websiteTitle: string;
+  link: string;
+  phone?: string;
+  email?: string; // NEW: Thêm Email
+  isOpen?: string;
+}
+
 // --- PROJECT SYSTEM ---
 export interface Project {
   id: string;
@@ -67,4 +81,37 @@ export interface TrackingProduct {
   lastUpdated: string; // ISO String
   image_url?: string;
   sources: Record<string, TrackingSourceData>; // key: 'shopee', 'lazada'...
+}
+
+// --- NEW: GMV COMPARATOR TYPES ---
+
+export interface ProcessedRow {
+  id: string;
+  brand: string;
+  category: string;
+  productName: string;
+  [key: string]: any; // Dynamic columns for months (T9, T10...) or metrics
+}
+
+export interface FileData {
+  fileName: string;
+  data: any[];
+}
+
+export interface ProcessingStatus {
+  step: 'idle' | 'reading' | 'processing' | 'completed' | 'error';
+  message: string;
+  progress: number;
+}
+
+// --- NEW: VIDEO ANALYTICS TYPES ---
+export interface VideoMetric {
+  id: string;
+  videoTitle: string;
+  views: number;
+  orders: number;
+  revenue: number;
+  ctr: number; // Click Through Rate (%)
+  conversionRate: number; // Orders / Views (%)
+  source: string;
 }
