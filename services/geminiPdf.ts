@@ -2,12 +2,11 @@
 import { GoogleGenAI } from "@google/genai";
 
 // DANH SÁCH MODEL ƯU TIÊN (STABLE LIST - FIXED VERSIONS)
-// Lưu ý: Phải dùng tên đầy đủ có phiên bản (-002, -exp) để tránh lỗi 404 khi deploy.
+// Đã cập nhật sang các model mới nhất để tránh lỗi 404
 const MODELS_TO_TRY = [
-    'gemini-2.0-flash-exp',   // Bản thử nghiệm mới nhất (Cực nhanh)
-    'gemini-1.5-flash-002',   // Bản ổn định mới nhất (Tháng 9/2024)
-    'gemini-1.5-pro-002',     // Bản Pro ổn định (Mạnh nhất)
-    'gemini-1.5-flash'        // Fallback cuối cùng
+    'gemini-3-flash-preview',   // Model mới nhất, tốc độ cao
+    'gemini-2.5-flash-latest',  // Bản ổn định đời 2.5
+    'gemini-2.0-flash-exp'      // Fallback
 ];
 
 // --- KEY MANAGEMENT SYSTEM ---
