@@ -4,22 +4,17 @@ import { ProductData, StoreResult } from "../types";
 
 // --- KEY ROTATION SYSTEM ---
 
-// Biến lưu vị trí key đang dùng hiện tại
 let currentKeyIndex = 0;
 let keyList: string[] = [];
 
-// Hàm lấy danh sách Key (Ưu tiên LocalStorage -> Env)
 const getKeys = (): string[] => {
-  // 1. Kiểm tra LocalStorage trước (User tự nhập trong Cài đặt)
   const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
   
-  // Logic tách chuỗi bằng dấu phẩy (,) hoặc xuống dòng (\n)
   if (localKey && localKey.length > 10) {
       const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
       if (rawKeys.length > 0) {
-          // Nếu danh sách key thay đổi (người dùng mới nhập), reset lại
           if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
-              console.log(`🔑 Đã nạp mới ${rawKeys.length} API Key từ Cài đặt.`);
+              console.log(`🔑 Key loaded from LocalStorage: ${rawKeys.length}`);
               keyList = rawKeys;
               currentKeyIndex = 0;
           }
@@ -27,48 +22,31 @@ const getKeys = (): string[] => {
       }
   }
 
-  // 2. Nếu không có LocalStorage, dùng biến môi trường
   if (keyList.length > 0) return keyList;
 
   const envKey = process.env.API_KEY || "";
   const keys = envKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
   
-  if (keys.length === 0) {
-    // Trả về rỗng để UI biết mà hiện Popup
-    return []; 
-  }
+  if (keys.length === 0) return []; 
 
-  console.log(`✅ Đã nạp thành công ${keys.length} API Key từ ENV.`);
+  console.log(`✅ Key loaded from Env: ${keys.length}`);
   keyList = keys;
   return keys;
 };
 
-// Hàm khởi tạo AI Client với Key hiện tại
 const getAIClient = () => {
   const keys = getKeys();
-  
-  if (keys.length === 0) {
-      // Throw lỗi đặc biệt để App.tsx bắt được và hiện Popup
-      throw new Error("MISSING_API_KEY"); 
-  }
-
-  // Lấy key theo vòng tròn
+  if (keys.length === 0) throw new Error("MISSING_API_KEY");
   const keyIndex = currentKeyIndex % keys.length;
-  const key = keys[keyIndex];
-  
-  return new GoogleGenAI({ apiKey: key });
+  return new GoogleGenAI({ apiKey: keys[keyIndex] });
 };
 
-// Hàm chuyển sang Key tiếp theo (khi gặp lỗi 429/400)
 const rotateKey = (): boolean => {
   const keys = getKeys();
-  if (keys.length <= 1) {
-      return false; // Chỉ có 1 key thì không đổi được
-  }
-  
+  if (keys.length <= 1) return false;
   const prevIndex = currentKeyIndex;
   currentKeyIndex = (currentKeyIndex + 1) % keys.length;
-  console.warn(`🔄 Auto-Rotate: Chuyển từ Key #${prevIndex + 1} sang Key #${currentKeyIndex + 1}`);
+  console.warn(`🔄 Auto-Rotate: Key #${prevIndex + 1} -> #${currentKeyIndex + 1}`);
   return true;
 };
 
@@ -148,7 +126,6 @@ const OFFICIAL_NAMES = [
   "Son dưỡng dầu dừa Bến Tre 5g"
 ];
 
-// --- HELPER: Process URL/Slug ---
 const slugify = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
@@ -156,7 +133,6 @@ const resolveProductUrl = (rawUrl: string, baseUrl: string): string => {
   try { return new URL(rawUrl, baseUrl).href; } catch (e) { return rawUrl; }
 };
 
-// --- PRE-PROCESS HTML ---
 const preProcessHtml = (rawHtml: string): string => {
   if (!rawHtml) return "";
   let clean = rawHtml
@@ -301,14 +277,7 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
         BẠN LÀ DATA NORMALIZER.
         INPUT: Danh sách tên thô.
         DICTIONARY: ${OFFICIAL_NAMES.join('\n')}
-        
-        YÊU CẦU:
-        1. Xác định "Lẻ" hay "Combo".
-        2. Nếu là Combo cùng loại (ví dụ: Combo 2 chai...), hãy thêm tiền tố "Combo X" vào tên chuẩn.
-        3. Chuẩn hóa tên theo Dictionary. Nếu là Combo nhiều loại khác nhau, tách ra và nối bằng " + ".
-        
         Output JSON map: "Tên gốc" -> { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet }
-        
         LIST: ${JSON.stringify(rawNames)}
       `;
       const response = await ai.models.generateContent({
@@ -316,14 +285,12 @@ const normalizeBatchWithAI = async (rawNames: string[], model: string) => {
         contents: prompt,
         config: { responseMimeType: "application/json" }
       });
+      // Handle empty string or unexpected end of input
       return JSON.parse(response.text || "{}");
     } catch (error: any) {
-      const msg = String(error.message || error);
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('400') || msg.includes('API key') || msg.includes('MISSING_API_KEY')) {
-         if (rotateKey()) {
-             await delay(1000);
-             continue;
-         }
+      if (rotateKey()) {
+         await delay(1000);
+         continue;
       }
       throw error;
     }
@@ -351,11 +318,6 @@ export const parseRawProducts = async (
       const ai = getAIClient();
       const prompt = `
         TASK: Extract MAIN PRODUCT LIST from HTML.
-        CRITICAL RULES:
-        1. ONLY extract products from the MAIN GRID/LIST.
-        2. IGNORE "Recommended", "Suggestions".
-        3. Focus on Image + Title + Price.
-        
         Input URL: ${url}
         Return JSON Array: [{sanPham, gia, productUrl}]
         HTML: ${safeHtml}
@@ -381,7 +343,16 @@ export const parseRawProducts = async (
         }
       });
       
-      const rawData = JSON.parse(response.text || "[]");
+      // FIX: Robust parsing to handle 'Unexpected end of input'
+      let rawData = [];
+      try {
+          const txt = response.text || "[]";
+          rawData = JSON.parse(txt);
+      } catch (parseError) {
+          console.warn("JSON Parse Error (Truncated response?):", parseError);
+          // If parsing fails, treat as empty and let retry logic handle it or skip
+          throw new Error("JSON_PARSE_ERROR"); 
+      }
 
       return rawData.map((item: any) => {
         const fixedUrl = resolveProductUrl(item.productUrl, url);
@@ -400,14 +371,7 @@ export const parseRawProducts = async (
 
     } catch (error: any) {
       const msg = String(error.message || error);
-      const isKeyError = 
-          msg.includes('429') || 
-          msg.includes('RESOURCE_EXHAUSTED') || 
-          error.status === 429 ||
-          error.status === 400 || 
-          msg.includes('INVALID_ARGUMENT') ||
-          msg.includes('API key') ||
-          msg.includes('MISSING_API_KEY');
+      const isKeyError = msg.includes('429') || error.status === 429 || msg.includes('400') || msg.includes('API key');
       
       if (isKeyError) {
         if (rotateKey()) {
@@ -426,43 +390,17 @@ export const parseRawProducts = async (
   return [];
 };
 
-// --- NEW FUNCTION: SEARCH LOCAL STORES WITH GOOGLE GROUNDING ---
 export const searchLocalStoresWithGemini = async (
   productName: string,
   location: string
 ): Promise<StoreResult[]> => {
   const ai = getAIClient();
-  const model = "gemini-2.5-flash"; // Use 2.5 Flash for Grounding
-  
-  const query = `Tìm cửa hàng bán "${productName}" tại "${location}".`;
+  const model = "gemini-2.5-flash"; 
   
   const prompt = `
     Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.
-    Nhiệm vụ: Tìm các cửa hàng, nhà thuốc, hoặc website đang bán sản phẩm "${productName}" ở khu vực "${location}".
-    
-    YÊU CẦU QUAN TRỌNG:
-    1. Sử dụng công cụ Google Search để tìm dữ liệu thực tế (Real-time).
-    2. Cố gắng tìm ít nhất 10-20 kết quả nếu có thể.
-    3. Ưu tiên lấy Link chi tiết sản phẩm (Direct Product URL) thay vì trang chủ.
-    4. Trả về kết quả dưới dạng JSON Array (Strict JSON).
-    
-    Cấu trúc JSON mong muốn:
-    [
-      {
-        "storeName": "Tên cửa hàng",
-        "address": "Địa chỉ cụ thể (nếu có)",
-        "priceEstimate": "Giá tham khảo (nếu thấy, ví dụ: '150.000đ', hoặc 'Liên hệ')",
-        "websiteTitle": "Tiêu đề trang web nguồn",
-        "link": "URL dẫn đến nơi bán (Ưu tiên link sản phẩm)",
-        "phone": "Số điện thoại (nếu có)",
-        "email": "Email liên hệ (nếu tìm thấy trên web/footer)", 
-        "isOpen": "Giờ mở cửa (nếu có)"
-      }
-    ]
-    
-    Nếu không tìm thấy giá cụ thể, hãy ghi "Xem chi tiết".
-    Nếu không có địa chỉ cụ thể (shop online), hãy ghi "Online".
-    Cố gắng tìm thêm Email nếu có thể.
+    Nhiệm vụ: Tìm các cửa hàng bán "${productName}" ở khu vực "${location}".
+    Trả về JSON Array: [{storeName, address, priceEstimate, link, phone, email, isOpen}]
   `;
 
   try {
@@ -470,14 +408,11 @@ export const searchLocalStoresWithGemini = async (
       model: model,
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }], // ENABLE GOOGLE SEARCH GROUNDING
-        // DO NOT use responseMimeType: 'application/json' with tools
+        tools: [{ googleSearch: {} }],
       }
     });
 
     const text = response.text || "[]";
-    
-    // Attempt to extract JSON from the text response
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     const cleanJson = jsonMatch ? jsonMatch[0] : "[]";
     
@@ -493,14 +428,9 @@ export const searchLocalStoresWithGemini = async (
     }
 
   } catch (error: any) {
-     const msg = String(error.message || error);
-     if (msg.includes('429') || msg.includes('400') || msg.includes('API key')) {
-         if (rotateKey()) {
-             // Retry once with new key
-             return searchLocalStoresWithGemini(productName, location);
-         }
+     if (rotateKey()) {
+         return searchLocalStoresWithGemini(productName, location);
      }
-     console.error("Store Search Error:", error);
      throw error;
   }
 };
@@ -519,65 +449,36 @@ export const processNormalization = async (
       const { normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet } = normalizeProductAlgorithm(item.sanPham);
       processed++;
       onProgress(Math.round((processed / total) * 100));
-      return {
-        ...item,
-        normalizedName,
-        plCombo,
-        phanLoaiTong,
-        phanLoaiChiTiet,
-        status: 'success'
-      };
+      return { ...item, normalizedName, plCombo, phanLoaiTong, phanLoaiChiTiet, status: 'success' };
     });
   } else {
-    // AI Method
-    const BATCH_SIZE = 10; // Keep small to avoid huge prompts
+    const BATCH_SIZE = 10;
     const results: ProductData[] = [...items];
     const model = "gemini-3-flash-preview";
 
     for (let i = 0; i < total; i += BATCH_SIZE) {
       const batch = results.slice(i, i + BATCH_SIZE);
       const rawNames = batch.map(b => b.sanPham);
-      
       try {
         const aiMap = await normalizeBatchWithAI(rawNames, model);
-        
         for (let j = 0; j < batch.length; j++) {
             const itemIndex = i + j;
             const originalName = results[itemIndex].sanPham;
             const aiData = aiMap[originalName];
-            
             if (aiData) {
-                results[itemIndex] = {
-                    ...results[itemIndex],
-                    normalizedName: aiData.normalizedName || originalName,
-                    plCombo: aiData.plCombo || "Lẻ",
-                    phanLoaiTong: aiData.phanLoaiTong || "Khác",
-                    phanLoaiChiTiet: aiData.phanLoaiChiTiet || "Khác",
-                    status: 'success'
-                };
+                results[itemIndex] = { ...results[itemIndex], ...aiData, status: 'success' };
             } else {
-                // Fallback
                 const fallback = normalizeProductAlgorithm(originalName);
-                results[itemIndex] = {
-                    ...results[itemIndex],
-                    ...fallback,
-                    status: 'success'
-                };
+                results[itemIndex] = { ...results[itemIndex], ...fallback, status: 'success' };
             }
         }
       } catch (e) {
-         console.warn("Batch AI Error, fallback to code:", e);
          for (let j = 0; j < batch.length; j++) {
             const itemIndex = i + j;
             const fallback = normalizeProductAlgorithm(results[itemIndex].sanPham);
-            results[itemIndex] = {
-                 ...results[itemIndex],
-                 ...fallback,
-                 status: 'success'
-            };
+            results[itemIndex] = { ...results[itemIndex], ...fallback, status: 'success' };
          }
       }
-
       processed += batch.length;
       onProgress(Math.min(Math.round((processed / total) * 100), 100));
       await delay(1000); 

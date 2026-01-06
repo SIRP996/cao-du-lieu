@@ -2,9 +2,11 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { jsPDF } from 'jspdf';
 
-// Sử dụng CDN cho worker để đảm bảo phiên bản khớp với thư viện chính (được load qua importmap trong index.html)
-// Điều này sửa lỗi "Invalid URL" và lỗi "Version Mismatch" khi chạy trên môi trường có importmap.
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+// --- PDF WORKER CONFIGURATION ---
+// Set worker source to a specific version to ensure stability on Vercel/CDN.
+// Fallback to 4.4.168 if version is not detected.
+const pdfjsVersion = pdfjsLib.version || '4.4.168';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsVersion}/build/pdf.worker.min.mjs`;
 
 export interface PdfPageData {
   pageNumber: number;
@@ -17,7 +19,8 @@ export const loadPdf = async (file: File): Promise<pdfjsLib.PDFDocumentProxy> =>
   return loadingTask.promise;
 };
 
-export const renderPageToImage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumber: number, scale = 1.5): Promise<string> => {
+// --- UPDATE: Render with High Quality for OCR ---
+export const renderPageToImage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumber: number, scale = 2.5): Promise<string> => {
   const page = await pdf.getPage(pageNumber);
   
   const viewport = page.getViewport({ scale });
@@ -38,7 +41,8 @@ export const renderPageToImage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumb
 
   await page.render(renderContext as any).promise;
   
-  return canvas.toDataURL('image/jpeg', 0.8);
+  // Return high quality JPEG
+  return canvas.toDataURL('image/jpeg', 0.95);
 };
 
 export const createPdfFromImages = async (imageFiles: File[]): Promise<File> => {

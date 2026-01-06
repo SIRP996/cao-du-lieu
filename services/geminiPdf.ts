@@ -2,9 +2,10 @@
 import { GoogleGenAI } from "@google/genai";
 
 // DANH SÁCH MODEL ƯU TIÊN (FALLBACK STRATEGY)
-// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, nhưng là bản thử nghiệm.
-// 2. gemini-3-flash-preview: Bản chuẩn mới nhất (Thay thế cho 1.5 đã cũ).
-const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-3-flash-preview'];
+// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, OCR rất tốt.
+// 2. gemini-2.0-pro-exp-02-05: Model Pro mới, thông minh hơn cho bảng phức tạp (nếu Flash thất bại).
+// 3. gemini-1.5-flash: Bản ổn định cũ (Fallback cuối).
+const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-1.5-flash'];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -79,17 +80,29 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
         try {
             const ai = createAIClient();
             
-            let taskDescription = "Trích xuất TOÀN BỘ văn bản trong hình.";
+            let taskDescription = "Extract ALL text from the image verbatim.";
             if (targetLanguage) {
-              taskDescription = `Trích xuất văn bản và DỊCH sang: ${targetLanguage}.`;
+              taskDescription = `Extract text and TRANSLATE to: ${targetLanguage}.`;
             }
 
+            // PROMPT CỰC KỲ CHI TIẾT ĐỂ ÉP KIỂU BẢNG BIỂU (STRICT TABLE MODE)
             const prompt = `
-              Nhiệm vụ: OCR & Convert to HTML.
-              1. ${taskDescription}
-              2. Output: HTML thô (không markdown, không thẻ html/body). Chỉ dùng thẻ <h2>, <p>, <ul>, <table>.
-              3. Giữ nguyên bố cục bảng biểu (table) nếu có.
-              4. Nếu ảnh mờ hoặc không có chữ, trả về: <p><i>(Không có nội dung)</i></p>
+              Role: You are a high-accuracy OCR engine specialized in complex data tables.
+              Task: ${taskDescription}
+              
+              STRICT OUTPUT RULES:
+              1. Format output as a valid HTML <table> with borders (border="1").
+              2. DO NOT SKIP ANY ROWS. Extract every single row you see in the image.
+              3. DO NOT MERGE CELLS incorrectly. Preserve the exact column structure.
+              4. If a cell is empty in the image, output <td></td>. Do not omit the cell.
+              5. Ensure header row (<th>) aligns perfectly with data rows (<td>).
+              6. Return ONLY the HTML code. No markdown code blocks (\`\`\`html), no introductory text.
+              7. If the image contains a list, use <ul>. If it's paragraphs, use <p>.
+              
+              CRITICAL:
+              - Look closely at price columns and numbers. Extract them exactly.
+              - Do not hallucinate data that is not there.
+              - If the image is blurry, do your best to infer from context but mark uncertain parts with [?].
             `;
 
             const response = await ai.models.generateContent({
@@ -102,15 +115,17 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
               },
               config: {
                 maxOutputTokens: 8000, 
-                temperature: 0.1, 
+                temperature: 0.0, // QUAN TRỌNG: 0.0 để AI không "sáng tạo" thêm bớt dữ liệu
+                topP: 0.8,
+                topK: 40
               }
             });
 
             let text = response.text || "";
-            // Clean markdown code blocks
-            text = text.replace(/^```html\s*/i, '').replace(/```$/, '');
+            // Clean markdown code blocks if AI still adds them
+            text = text.replace(/^```html\s*/i, '').replace(/```$/, '').trim();
             
-            if (!text.trim()) return "<p><i>(AI trả về nội dung rỗng)</i></p>";
+            if (!text) return "<p><i>(AI trả về nội dung rỗng)</i></p>";
             
             return text; // THÀNH CÔNG -> Trả về ngay
 
@@ -128,7 +143,7 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
                 msg.includes('quota') || 
                 msg.includes('check your API key');
 
-            // Các lỗi liên quan đến Model không tìm thấy hoặc server quá tải
+            // Các lỗi liên quan đến Model
             const isModelError = 
                 msg.includes('404') || 
                 msg.includes('not found') || 
@@ -148,16 +163,15 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
             if (isKeyError) {
                  if (rotateKey()) {
                      await new Promise(r => setTimeout(r, 1000));
-                     continue; // Thử lại với key mới (cùng model)
+                     continue; // Thử lại với key mới
                  }
             }
             
-            // Nếu lỗi Model (404, 503...) -> Break vòng lặp con để chuyển ngay sang Model tiếp theo trong danh sách
+            // Nếu lỗi Model -> Chuyển ngay sang Model tiếp theo
             if (isModelError) {
                 break; 
             }
             
-            // Nếu lỗi khác (mạng chập chờn...), thử lại 1 lần rồi chuyển model
             await new Promise(r => setTimeout(r, 1500));
         }
       }
@@ -170,6 +184,6 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
         ${lastErrorMsg.substring(0, 300)}
       </div>
       <br/>
-      <i>Gợi ý: Kiểm tra lại API Key, kết nối mạng hoặc thử ảnh khác rõ nét hơn.</i>
+      <i>Gợi ý: Kiểm tra lại API Key hoặc kết nối mạng.</i>
   </div>`;
 };
