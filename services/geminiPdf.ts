@@ -1,85 +1,115 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// Using gemini-3-pro-preview as requested for high quality vision tasks
-const MODEL_NAME = 'gemini-3-pro-preview';
+// Sử dụng gemini-2.0-flash-exp cho tốc độ OCR nhanh nhất và hạn chế Timeout trên Vercel
+// Model này xử lý Vision (Hình ảnh) rất tốt và nhẹ hơn dòng Pro
+const MODEL_NAME = 'gemini-2.0-flash-exp';
+
+// --- KEY MANAGEMENT SYSTEM (Đồng bộ với geminiScraper.ts) ---
+
+const getKeys = (): string[] => {
+  // 1. Ưu tiên lấy từ LocalStorage (Do người dùng nhập trong Cài đặt)
+  const localKey = localStorage.getItem('USER_GEMINI_API_KEY');
+  
+  if (localKey && localKey.length > 10) {
+      const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+      if (rawKeys.length > 0) return rawKeys;
+  }
+
+  // 2. Fallback sang biến môi trường
+  const envKey = process.env.API_KEY || "";
+  const keys = envKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
+  
+  return keys.length > 0 ? keys : [];
+};
+
+const getRandomKey = (excludeKey?: string): string => {
+    const keys = getKeys();
+    if (keys.length === 0) throw new Error("MISSING_API_KEY");
+    
+    if (keys.length === 1) return keys[0];
+    
+    // Nếu có key cần loại bỏ (do lỗi), chọn key khác ngẫu nhiên
+    const available = excludeKey ? keys.filter(k => k !== excludeKey) : keys;
+    if (available.length === 0) return keys[0]; // Quay lại key đầu nếu hết
+    
+    return available[Math.floor(Math.random() * available.length)];
+};
 
 export const analyzePdfPage = async (base64Image: string, targetLanguage?: string): Promise<string> => {
+  let currentApiKey = "";
+  
   try {
-    // Initialize with the environment API key as per system requirements
-    // Note: Assuming process.env.API_KEY is available globally as configured in vite.config.ts
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("API Key not found");
+    currentApiKey = getRandomKey();
     
-    // Support splitting multiple keys if provided in the app context, but for simplicity here we use the first valid one or the env one directly.
-    // In the main app, we manage keys via local storage too. For this service, we'll try to grab from localStorage if available to match app behavior, or fallback to env.
-    
-    let activeKey = apiKey;
-    const localKeys = localStorage.getItem('USER_GEMINI_API_KEY');
-    if (localKeys) {
-        const keys = localKeys.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
-        if (keys.length > 0) activeKey = keys[0]; // Simple usage of first key
-    }
+    // Retry Logic: Thử tối đa 2 lần (đổi key nếu lần đầu lỗi 429/400)
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const ai = new GoogleGenAI({ apiKey: currentApiKey });
 
-    const ai = new GoogleGenAI({ apiKey: activeKey });
-
-    let taskDescription = "Trích xuất chính xác văn bản tiếng Việt hoặc tiếng Anh trong hình.";
-    if (targetLanguage) {
-      taskDescription = `Trích xuất văn bản trong hình và DỊCH TOÀN BỘ nội dung sang ngôn ngữ: ${targetLanguage}. Đảm bảo dịch mượt mà, tự nhiên và chính xác ngữ cảnh.`;
-    }
-
-    const prompt = `
-      Bạn là một chuyên gia OCR, xử lý văn bản và dịch thuật đa ngôn ngữ. Nhiệm vụ của bạn là trích xuất nội dung từ hình ảnh trang tài liệu PDF scan này.
-      
-      Yêu cầu cụ thể:
-      1. ${taskDescription}
-      2. Giữ nguyên cấu trúc định dạng của văn bản gốc bằng cách sử dụng các thẻ HTML ngữ nghĩa (ví dụ: <h1>, <h2> cho tiêu đề, <p> cho đoạn văn, <table> cho bảng biểu, <ul>/<li> cho danh sách).
-      3. KHÔNG sử dụng thẻ <html>, <head>, hay <body>. Chỉ trả về nội dung bên trong body.
-      4. KHÔNG bọc kết quả trong markdown code blocks (như \`\`\`html). Trả về chuỗi HTML thô.
-      5. Nếu ảnh mờ hoặc không có chữ, hãy trả về một thẻ <p><i>(Không tìm thấy văn bản hoặc ảnh quá mờ)</i></p>.
-      6. LƯU Ý QUAN TRỌNG: Chỉ dịch nội dung văn bản hiển thị, KHÔNG dịch tên thẻ HTML (tags), tên class hoặc id.
-    `;
-
-    // Remove header prefix if present (e.g., "data:image/png;base64,")
-    const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
-
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: cleanBase64
+            let taskDescription = "Trích xuất TOÀN BỘ văn bản trong hình.";
+            if (targetLanguage) {
+              taskDescription = `Trích xuất văn bản và DỊCH sang: ${targetLanguage}.`;
             }
-          },
-          {
-            text: prompt
-          }
-        ]
-      },
-      config: {
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }
-        ]
-      }
-    });
 
-    let text = response.text || "";
-    
-    // Clean up markdown code blocks if present
-    text = text.replace(/^```html\s*/i, '').replace(/```$/, '');
-    
-    if (!text.trim()) {
-       return "<p><i>(AI trả về nội dung rỗng)</i></p>";
+            const prompt = `
+              Nhiệm vụ: OCR & Convert to HTML.
+              1. ${taskDescription}
+              2. Output: HTML thô (không markdown). Dùng thẻ <h2>, <p>, <ul>, <table>.
+              3. Giữ nguyên bố cục bảng biểu (table) nếu có.
+              4. Nếu không có chữ, trả về: <p><i>(Không có nội dung)</i></p>
+            `;
+
+            // Remove header prefix if present
+            const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+
+            const response = await ai.models.generateContent({
+              model: MODEL_NAME,
+              contents: {
+                parts: [
+                  { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                  { text: prompt }
+                ]
+              },
+              config: {
+                // Giảm token output để phản hồi nhanh hơn, tránh timeout
+                maxOutputTokens: 8000, 
+                temperature: 0.2, // Giảm sáng tạo để tăng độ chính xác OCR
+              }
+            });
+
+            let text = response.text || "";
+            text = text.replace(/^```html\s*/i, '').replace(/```$/, '');
+            
+            if (!text.trim()) return "<p><i>(AI trả về nội dung rỗng)</i></p>";
+            return text;
+
+        } catch (innerError: any) {
+            console.warn(`Attempt ${attempt + 1} failed with key ...${currentApiKey.slice(-4)}`);
+            
+            const msg = String(innerError.message || innerError);
+            // Nếu lỗi liên quan đến Quota hoặc Key, thử đổi key khác
+            if (msg.includes('429') || msg.includes('400') || msg.includes('API key')) {
+                if (attempt < 1) {
+                    currentApiKey = getRandomKey(currentApiKey);
+                    continue; // Retry loop
+                }
+            }
+            throw innerError; // Ném lỗi ra ngoài nếu không phải lỗi key hoặc đã hết lượt thử
+        }
     }
+    
+    return "<p><i>(Lỗi kết nối sau nhiều lần thử)</i></p>";
 
-    return text;
   } catch (error) {
-    console.error("Gemini API Error:", error);
-    return `<div class="text-red-500 font-bold">Lỗi khi xử lý trang này: ${error instanceof Error ? error.message : String(error)}</div>`;
+    console.error("Gemini OCR Error:", error);
+    const errStr = String(error);
+    if (errStr.includes("MISSING_API_KEY")) {
+        return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
+            Lỗi: Chưa cấu hình API Key.<br/>
+            Vui lòng bấm nút <b>KEY</b> ở góc trên bên phải để nhập API Key.
+        </div>`;
+    }
+    return `<div class="text-red-500 font-bold">Lỗi xử lý: ${error instanceof Error ? error.message : String(error)}</div>`;
   }
 };
