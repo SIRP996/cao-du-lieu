@@ -1,11 +1,12 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// DANH SÁCH MODEL ƯU TIÊN (FALLBACK STRATEGY)
-// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, OCR cực tốt.
-// 2. gemini-2.5-flash-preview: Bản ổn định mới nhất.
-// 3. gemini-1.5-flash-latest: Bản 1.5 mới nhất (thay cho 'gemini-1.5-flash' bị lỗi 404).
-const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-2.5-flash-preview', 'gemini-1.5-flash-latest'];
+// DANH SÁCH MODEL ƯU TIÊN (STABLE LIST)
+// Lưu ý: Không dùng 'latest', 'preview' hay phiên bản ảo (2.5) để tránh lỗi 404 trên Production.
+// 1. gemini-2.0-flash: Model nhanh nhất, mới nhất hiện tại.
+// 2. gemini-1.5-flash: Bản ổn định tiêu chuẩn.
+// 3. gemini-1.5-pro: Bản mạnh nhất (fallback nếu Flash không đọc được chữ mờ).
+const MODELS_TO_TRY = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -168,6 +169,8 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
             
             // Nếu lỗi Model -> Chuyển ngay sang Model tiếp theo
             if (isModelError) {
+                // Log để debug xem model nào bị lỗi
+                console.error(`Model ${modelName} died:`, msg);
                 break; 
             }
             
@@ -180,7 +183,7 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
   return `<div class="p-4 bg-red-50 border border-red-100 rounded text-sm text-red-600">
       <strong>Lỗi trích xuất (Thất bại sau ${attempts} lần thử):</strong><br/>
       <div class="mt-2 p-2 bg-white rounded border border-red-200 font-mono text-xs text-red-500 break-words">
-        ${lastErrorMsg.substring(0, 300)}
+        ${lastErrorMsg.substring(0, 300)}...
       </div>
       <br/>
       <i>Gợi ý: Kiểm tra lại API Key, kết nối mạng hoặc thử lại.</i>

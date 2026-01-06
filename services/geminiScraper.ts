@@ -303,7 +303,8 @@ export const parseRawProducts = async (
   htmlHint: string, 
   sourceIndex: number
 ): Promise<Partial<ProductData>[]> => {
-  const model = "gemini-3-flash-preview";
+  // Use a stable model for parsing raw products
+  const model = "gemini-1.5-flash";
   const cleanHtmlInput = preProcessHtml(htmlHint);
   
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
@@ -343,14 +344,12 @@ export const parseRawProducts = async (
         }
       });
       
-      // FIX: Robust parsing to handle 'Unexpected end of input'
       let rawData = [];
       try {
           const txt = response.text || "[]";
           rawData = JSON.parse(txt);
       } catch (parseError) {
           console.warn("JSON Parse Error (Truncated response?):", parseError);
-          // If parsing fails, treat as empty and let retry logic handle it or skip
           throw new Error("JSON_PARSE_ERROR"); 
       }
 
@@ -395,7 +394,8 @@ export const searchLocalStoresWithGemini = async (
   location: string
 ): Promise<StoreResult[]> => {
   const ai = getAIClient();
-  const model = "gemini-2.5-flash-preview"; 
+  // Use a stable model for search
+  const model = "gemini-1.5-flash"; 
   
   const prompt = `
     Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.
@@ -454,7 +454,7 @@ export const processNormalization = async (
   } else {
     const BATCH_SIZE = 10;
     const results: ProductData[] = [...items];
-    const model = "gemini-3-flash-preview";
+    const model = "gemini-1.5-flash";
 
     for (let i = 0; i < total; i += BATCH_SIZE) {
       const batch = results.slice(i, i + BATCH_SIZE);
