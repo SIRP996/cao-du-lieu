@@ -303,8 +303,8 @@ export const parseRawProducts = async (
   htmlHint: string, 
   sourceIndex: number
 ): Promise<Partial<ProductData>[]> => {
-  // Use a stable model for parsing raw products
-  const model = "gemini-1.5-flash";
+  // Update to a specific stable version
+  const model = "gemini-1.5-flash-002";
   const cleanHtmlInput = preProcessHtml(htmlHint);
   
   if (cleanHtmlInput.length < 50 && url.length < 10) return [];
@@ -394,8 +394,8 @@ export const searchLocalStoresWithGemini = async (
   location: string
 ): Promise<StoreResult[]> => {
   const ai = getAIClient();
-  // Use a stable model for search
-  const model = "gemini-1.5-flash"; 
+  // Update to a specific stable version
+  const model = "gemini-1.5-flash-002"; 
   
   const prompt = `
     Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.
@@ -454,7 +454,7 @@ export const processNormalization = async (
   } else {
     const BATCH_SIZE = 10;
     const results: ProductData[] = [...items];
-    const model = "gemini-1.5-flash";
+    const model = "gemini-1.5-flash-002";
 
     for (let i = 0; i < total; i += BATCH_SIZE) {
       const batch = results.slice(i, i + BATCH_SIZE);

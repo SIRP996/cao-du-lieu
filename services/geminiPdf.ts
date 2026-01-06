@@ -1,12 +1,14 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// DANH SÁCH MODEL ƯU TIÊN (STABLE LIST)
-// Lưu ý: Không dùng 'latest', 'preview' hay phiên bản ảo (2.5) để tránh lỗi 404 trên Production.
-// 1. gemini-2.0-flash: Model nhanh nhất, mới nhất hiện tại.
-// 2. gemini-1.5-flash: Bản ổn định tiêu chuẩn.
-// 3. gemini-1.5-pro: Bản mạnh nhất (fallback nếu Flash không đọc được chữ mờ).
-const MODELS_TO_TRY = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+// DANH SÁCH MODEL ƯU TIÊN (STABLE LIST - FIXED VERSIONS)
+// Lưu ý: Phải dùng tên đầy đủ có phiên bản (-002, -exp) để tránh lỗi 404 khi deploy.
+const MODELS_TO_TRY = [
+    'gemini-2.0-flash-exp',   // Bản thử nghiệm mới nhất (Cực nhanh)
+    'gemini-1.5-flash-002',   // Bản ổn định mới nhất (Tháng 9/2024)
+    'gemini-1.5-pro-002',     // Bản Pro ổn định (Mạnh nhất)
+    'gemini-1.5-flash'        // Fallback cuối cùng
+];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -143,7 +145,7 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
                 msg.includes('quota') || 
                 msg.includes('check your API key');
 
-            // Các lỗi liên quan đến Model
+            // Các lỗi liên quan đến Model (404, 503...)
             const isModelError = 
                 msg.includes('404') || 
                 msg.includes('not found') || 
@@ -167,9 +169,8 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
                  }
             }
             
-            // Nếu lỗi Model -> Chuyển ngay sang Model tiếp theo
+            // Nếu lỗi Model -> Chuyển ngay sang Model tiếp theo trong danh sách
             if (isModelError) {
-                // Log để debug xem model nào bị lỗi
                 console.error(`Model ${modelName} died:`, msg);
                 break; 
             }
