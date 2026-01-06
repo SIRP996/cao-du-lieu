@@ -1,9 +1,10 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// SỬ DỤNG MODEL FLASH ĐỂ TRÁNH TIMEOUT TRÊN VERCEL
-// gemini-2.0-flash-exp là model nhanh nhất hiện tại cho tác vụ Vision (OCR)
-const MODEL_NAME = 'gemini-2.0-flash-exp';
+// DANH SÁCH MODEL ƯU TIÊN (FALLBACK STRATEGY)
+// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, nhưng là bản thử nghiệm (có thể không ổn định).
+// 2. gemini-1.5-flash: Bản ổn định, hỗ trợ Vision tốt, ít bị lỗi 503.
+const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-1.5-flash'];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -35,16 +36,16 @@ const getKeys = (): string[] => {
   return keys;
 };
 
-// Hàm lấy Client mới với key hiện tại (luôn gọi lại hàm này mỗi lần request)
-const createAIClient = () => {
+// Hàm lấy Client mới với key hiện tại
+const createAIClient = (specificKey?: string) => {
+    if (specificKey) return new GoogleGenAI({ apiKey: specificKey });
+
     const keys = getKeys();
     if (keys.length === 0) throw new Error("MISSING_API_KEY");
     
     // Lấy key theo vòng tròn
     const keyIndex = currentKeyIndex % keys.length;
     const key = keys[keyIndex];
-    
-    // console.log(`Using Key [${keyIndex}]: ...${key.slice(-4)}`);
     return new GoogleGenAI({ apiKey: key });
 };
 
@@ -62,107 +63,111 @@ const rotateKey = (): boolean => {
 
 export const analyzePdfPage = async (base64Image: string, targetLanguage?: string): Promise<string> => {
   let attempts = 0;
-  const maxAttempts = 3; // Thử tối đa 3 lần
+  // Tổng số lần thử = (Số model) x 2 lần retry mỗi model
+  const maxAttempts = MODELS_TO_TRY.length * 2; 
+  
+  let lastErrorMsg = "";
 
-  while (attempts < maxAttempts) {
-    try {
+  // Remove header prefix if present
+  const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+
+  // Vòng lặp thử qua các Model và các Key
+  for (const modelName of MODELS_TO_TRY) {
+      // Mỗi model thử tối đa 2 lần (xoay key nếu cần)
+      for (let i = 0; i < 2; i++) {
         attempts++;
-        const ai = createAIClient();
-        
-        let taskDescription = "Trích xuất TOÀN BỘ văn bản trong hình.";
-        if (targetLanguage) {
-          taskDescription = `Trích xuất văn bản và DỊCH sang: ${targetLanguage}.`;
+        try {
+            const ai = createAIClient();
+            
+            let taskDescription = "Trích xuất TOÀN BỘ văn bản trong hình.";
+            if (targetLanguage) {
+              taskDescription = `Trích xuất văn bản và DỊCH sang: ${targetLanguage}.`;
+            }
+
+            const prompt = `
+              Nhiệm vụ: OCR & Convert to HTML.
+              1. ${taskDescription}
+              2. Output: HTML thô (không markdown, không thẻ html/body). Chỉ dùng thẻ <h2>, <p>, <ul>, <table>.
+              3. Giữ nguyên bố cục bảng biểu (table) nếu có.
+              4. Nếu ảnh mờ hoặc không có chữ, trả về: <p><i>(Không có nội dung)</i></p>
+            `;
+
+            const response = await ai.models.generateContent({
+              model: modelName,
+              contents: {
+                parts: [
+                  { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+                  { text: prompt }
+                ]
+              },
+              config: {
+                maxOutputTokens: 8000, 
+                temperature: 0.1, 
+              }
+            });
+
+            let text = response.text || "";
+            // Clean markdown code blocks
+            text = text.replace(/^```html\s*/i, '').replace(/```$/, '');
+            
+            if (!text.trim()) return "<p><i>(AI trả về nội dung rỗng)</i></p>";
+            
+            return text; // THÀNH CÔNG -> Trả về ngay
+
+        } catch (error: any) {
+            console.warn(`PDF Extract Error (${modelName} - Try ${i+1}):`, error);
+            
+            const msg = String(error.message || error);
+            lastErrorMsg = msg;
+
+            // Phân loại lỗi
+            const isKeyError = 
+                msg.includes('429') || 
+                msg.includes('400') || 
+                msg.includes('API key') || 
+                msg.includes('quota') || 
+                msg.includes('check your API key');
+
+            const isModelError = 
+                msg.includes('503') || 
+                msg.includes('500') || 
+                msg.includes('overloaded') ||
+                msg.includes('not found') || 
+                msg.includes('not supported');
+
+            if (msg.includes("MISSING_API_KEY")) {
+                 return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
+                    Lỗi: Chưa cấu hình API Key.<br/>
+                    Vui lòng bấm nút <b>KEY</b> ở góc trên bên phải để nhập API Key.
+                </div>`;
+            }
+
+            // XỬ LÝ RETRY
+            if (isKeyError) {
+                 if (rotateKey()) {
+                     await new Promise(r => setTimeout(r, 1000));
+                     continue; // Thử lại với key mới (cùng model)
+                 }
+            }
+            
+            // Nếu lỗi Model (503, not supported) -> Break vòng lặp con để chuyển sang Model tiếp theo
+            if (isModelError) {
+                break; 
+            }
+            
+            // Nếu lỗi khác, thử lại 1 lần rồi chuyển model
+            await new Promise(r => setTimeout(r, 1500));
         }
-
-        const prompt = `
-          Nhiệm vụ: OCR & Convert to HTML.
-          1. ${taskDescription}
-          2. Output: HTML thô (không markdown, không thẻ html/body). Chỉ dùng thẻ <h2>, <p>, <ul>, <table>.
-          3. Giữ nguyên bố cục bảng biểu (table) nếu có.
-          4. Nếu ảnh mờ hoặc không có chữ, trả về: <p><i>(Không có nội dung)</i></p>
-        `;
-
-        // Clean base64 header if exists
-        const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
-
-        const response = await ai.models.generateContent({
-          model: MODEL_NAME,
-          contents: {
-            parts: [
-              { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-              { text: prompt }
-            ]
-          },
-          config: {
-            maxOutputTokens: 8000, 
-            temperature: 0.1, 
-          }
-        });
-
-        let text = response.text || "";
-        // Clean markdown code blocks
-        text = text.replace(/^```html\s*/i, '').replace(/```$/, '');
-        
-        if (!text.trim()) return "<p><i>(AI trả về nội dung rỗng)</i></p>";
-        
-        return text;
-
-    } catch (error: any) {
-        console.warn(`PDF Extract Error (Attempt ${attempts}/${maxAttempts}):`, error);
-        
-        const msg = String(error.message || error);
-        
-        // Kiểm tra các lỗi liên quan đến Key hoặc Rate Limit
-        const isKeyError = 
-            msg.includes('429') || 
-            msg.includes('400') || 
-            msg.includes('API key') || 
-            msg.includes('quota') ||
-            msg.includes('RESOURCE_EXHAUSTED') ||
-            msg.includes('fetch failed') || // Mạng lỗi cũng nên đổi key/thử lại
-            msg.includes('Load failed');
-
-        // Logic Retry
-        let shouldRetry = false;
-        
-        // Nếu lỗi Key -> Xoay Key -> Retry
-        if (isKeyError) {
-             if (rotateKey()) {
-                 shouldRetry = true;
-             } else {
-                 // Nếu chỉ có 1 key mà lỗi 429/mạng -> Retry luôn với key đó (hy vọng mạng ổn)
-                 shouldRetry = true; 
-             }
-        } else {
-            // Lỗi khác (Server error 500, 503...) -> Cũng retry
-             shouldRetry = true;
-        }
-
-        // Nếu còn lượt thử và quyết định retry
-        if (shouldRetry && attempts < maxAttempts) {
-            await new Promise(r => setTimeout(r, 1500)); // Đợi 1.5s
-            continue; // Quay lại đầu vòng lặp
-        }
-        
-        // --- NẾU KHÔNG RETRY ĐƯỢC NỮA -> TRẢ VỀ LỖI ---
-        
-        if (msg.includes("MISSING_API_KEY")) {
-             return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
-                Lỗi: Chưa cấu hình API Key.<br/>
-                Vui lòng bấm nút <b>KEY</b> ở góc trên bên phải để nhập API Key.
-            </div>`;
-        }
-
-        // Trả về lỗi chi tiết thay vì chuỗi chung chung
-        return `<div class="p-4 bg-red-50 border border-red-100 rounded text-sm text-red-600">
-            <strong>Lỗi trích xuất (Thử ${attempts}/${maxAttempts}):</strong><br/>
-            ${msg.substring(0, 150)}...
-            <br/><br/>
-            <i>Gợi ý: Thử lại hoặc giảm dung lượng ảnh/PDF.</i>
-        </div>`;
-    }
+      }
   }
 
-  // Fallback cuối cùng nếu vòng lặp thoát bất thường (hiếm khi xảy ra với logic trên)
-  return "<p><i>(Lỗi kết nối: Đã hết lượt thử lại)</i></p>";
+  // Nếu chạy hết vòng lặp mà vẫn lỗi
+  return `<div class="p-4 bg-red-50 border border-red-100 rounded text-sm text-red-600">
+      <strong>Lỗi trích xuất (Thất bại sau ${attempts} lần thử):</strong><br/>
+      <div class="mt-2 p-2 bg-white rounded border border-red-200 font-mono text-xs text-red-500 break-words">
+        ${lastErrorMsg.substring(0, 300)}
+      </div>
+      <br/>
+      <i>Gợi ý: Kiểm tra lại API Key, kết nối mạng hoặc thử ảnh khác rõ nét hơn.</i>
+  </div>`;
 };
