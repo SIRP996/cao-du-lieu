@@ -7,143 +7,100 @@ import GmvComparator from './components/GmvComparator';
 import VideoAnalytics from './components/VideoAnalytics';
 import PdfExtractor from './components/PdfExtractor';
 import PriceComparator from './components/PriceComparator';
-import { Database, LineChart, Video, LogOut, ChevronRight, Menu, FileText, TrendingDown } from 'lucide-react';
+import { Database, LineChart, Video, LogOut, FileText, TrendingDown, Cpu } from 'lucide-react';
 
 type Module = 'scraper' | 'gmv' | 'video' | 'pdf' | 'price';
 
 const MainLayout = () => {
     const { currentUser, logout } = useAuth();
     const [activeModule, setActiveModule] = useState<Module>('scraper');
-    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
     if (!currentUser) return <Login />;
 
+    const navItems = [
+        { id: 'scraper', label: 'Scraper Tool', icon: Database, color: 'indigo' },
+        { id: 'gmv', label: 'GMV Comparator', icon: LineChart, color: 'emerald' },
+        { id: 'price', label: 'Price History', icon: TrendingDown, color: 'amber' },
+        { id: 'video', label: 'Video Analytics', icon: Video, color: 'rose' },
+        { id: 'pdf', label: 'PDF Extractor AI', icon: FileText, color: 'blue' },
+    ];
+
     return (
-        <div className="min-h-screen bg-[#f8fafc] flex relative overflow-hidden">
+        <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans text-slate-900">
             
-            {/* MAIN CONTENT AREA */}
-            <div className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'mr-[280px]' : 'mr-0'} p-6 overflow-y-auto h-screen custom-scrollbar`}>
-                <div className="max-w-[1700px] mx-auto pb-20">
-                    {/* TOP HEADER MOBILE TOGGLE */}
-                    <button 
-                        className={`fixed top-4 right-4 z-50 p-3 bg-white shadow-lg rounded-xl border border-slate-200 text-slate-600 hover:text-indigo-600 transition-all ${isSidebarOpen ? 'hidden' : 'block'}`}
-                        onClick={() => setIsSidebarOpen(true)}
-                    >
-                        <Menu className="w-5 h-5" />
-                    </button>
-
-                    {/* MODULE CONTENT */}
-                    <div className="animate-in fade-in zoom-in duration-300 h-full">
-                        {activeModule === 'scraper' && <ScraperTool />}
-                        {activeModule === 'gmv' && <GmvComparator />}
-                        {activeModule === 'video' && <VideoAnalytics />}
-                        {activeModule === 'pdf' && <PdfExtractor />}
-                        {activeModule === 'price' && <PriceComparator />}
-                    </div>
-                </div>
-            </div>
-
-            {/* RIGHT SIDEBAR NAVIGATION */}
-            <div className={`fixed top-0 right-0 h-full bg-white border-l border-slate-200 shadow-2xl z-40 transition-transform duration-300 w-[280px] flex flex-col ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+            {/* TOP NAVIGATION BAR (TASKBAR) */}
+            <header className="fixed top-0 left-0 right-0 h-16 bg-white border-b border-slate-200 z-[100] px-4 md:px-6 flex items-center justify-between shadow-sm">
                 
-                {/* Sidebar Header */}
-                <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                    <div>
-                        <h2 className="text-sm font-black uppercase text-slate-800 tracking-widest">Công Cụ</h2>
-                        <p className="text-[10px] text-slate-400 font-bold mt-1">SirP 96 Super App</p>
+                {/* 1. LOGO / BRAND */}
+                <div className="flex items-center gap-3 min-w-fit">
+                    <div className="bg-slate-900 p-1.5 rounded-lg">
+                        <Cpu className="w-6 h-6 text-primary" />
                     </div>
-                    <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-slate-200 rounded-lg text-slate-400 hover:text-slate-600 transition-colors">
-                        <ChevronRight className="w-5 h-5" />
-                    </button>
+                    <div>
+                        <h1 className="text-lg font-black uppercase tracking-tighter leading-none text-slate-900">
+                            SirP <span className="text-indigo-600">96</span>
+                        </h1>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-0.5">
+                            Super App
+                        </p>
+                    </div>
                 </div>
 
-                {/* Modules List */}
-                <div className="flex-1 p-4 space-y-2 overflow-y-auto">
-                    <button 
-                        onClick={() => setActiveModule('scraper')}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'scraper' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'hover:bg-slate-50 text-slate-500'}`}
-                    >
-                        <div className={`p-2 rounded-lg ${activeModule === 'scraper' ? 'bg-white/20' : 'bg-indigo-50 text-indigo-600 group-hover:bg-white'}`}>
-                            <Database className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-bold">Scraper Tool</span>
-                            <span className={`text-[10px] ${activeModule === 'scraper' ? 'text-indigo-200' : 'text-slate-400'}`}>Cào giá & Tìm điểm bán</span>
-                        </div>
-                        {activeModule === 'scraper' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
-                    </button>
+                {/* 2. NAVIGATION ITEMS (CENTER) */}
+                <nav className="flex-1 flex items-center justify-center gap-1 md:gap-2 px-4 overflow-x-auto no-scrollbar">
+                    {navItems.map((item) => {
+                        const isActive = activeModule === item.id;
+                        const Icon = item.icon;
+                        
+                        // Dynamic color classes based on active state and specific color
+                        let activeClass = '';
+                        switch(item.color) {
+                            case 'indigo': activeClass = isActive ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'text-slate-500 hover:bg-indigo-50 hover:text-indigo-600'; break;
+                            case 'emerald': activeClass = isActive ? 'bg-emerald-600 text-white shadow-md shadow-emerald-200' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-600'; break;
+                            case 'amber': activeClass = isActive ? 'bg-amber-500 text-white shadow-md shadow-amber-200' : 'text-slate-500 hover:bg-amber-50 hover:text-amber-600'; break;
+                            case 'rose': activeClass = isActive ? 'bg-rose-600 text-white shadow-md shadow-rose-200' : 'text-slate-500 hover:bg-rose-50 hover:text-rose-600'; break;
+                            case 'blue': activeClass = isActive ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-600'; break;
+                            default: activeClass = isActive ? 'bg-slate-900 text-white' : 'text-slate-500';
+                        }
 
-                    <button 
-                        onClick={() => setActiveModule('gmv')}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'gmv' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200' : 'hover:bg-slate-50 text-slate-500'}`}
-                    >
-                        <div className={`p-2 rounded-lg ${activeModule === 'gmv' ? 'bg-white/20' : 'bg-emerald-50 text-emerald-600 group-hover:bg-white'}`}>
-                            <LineChart className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-bold">GMV Comparator</span>
-                            <span className={`text-[10px] ${activeModule === 'gmv' ? 'text-emerald-200' : 'text-slate-400'}`}>So sánh & Phân tích DT</span>
-                        </div>
-                        {activeModule === 'gmv' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
-                    </button>
+                        return (
+                            <button
+                                key={item.id}
+                                onClick={() => setActiveModule(item.id as Module)}
+                                className={`flex items-center gap-2 px-3 md:px-4 py-2 rounded-xl transition-all duration-200 whitespace-nowrap group ${activeClass}`}
+                            >
+                                <Icon className={`w-4 h-4 ${isActive ? 'animate-pulse' : ''}`} />
+                                <span className="text-xs md:text-sm font-bold hidden md:inline-block">{item.label}</span>
+                            </button>
+                        );
+                    })}
+                </nav>
 
-                    <button 
-                        onClick={() => setActiveModule('price')}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'price' ? 'bg-amber-600 text-white shadow-lg shadow-amber-200' : 'hover:bg-slate-50 text-slate-500'}`}
-                    >
-                        <div className={`p-2 rounded-lg ${activeModule === 'price' ? 'bg-white/20' : 'bg-amber-50 text-amber-600 group-hover:bg-white'}`}>
-                            <TrendingDown className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-bold">Price History</span>
-                            <span className={`text-[10px] ${activeModule === 'price' ? 'text-amber-200' : 'text-slate-400'}`}>So sánh lịch sử Giá</span>
-                        </div>
-                        {activeModule === 'price' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
-                    </button>
-
-                    <button 
-                        onClick={() => setActiveModule('video')}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'video' ? 'bg-rose-600 text-white shadow-lg shadow-rose-200' : 'hover:bg-slate-50 text-slate-500'}`}
-                    >
-                        <div className={`p-2 rounded-lg ${activeModule === 'video' ? 'bg-white/20' : 'bg-rose-50 text-rose-600 group-hover:bg-white'}`}>
-                            <Video className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-bold">Video Analytics</span>
-                            <span className={`text-[10px] ${activeModule === 'video' ? 'text-rose-200' : 'text-slate-400'}`}>Chuyển đổi Video</span>
-                        </div>
-                        {activeModule === 'video' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
-                    </button>
-
-                    <button 
-                        onClick={() => setActiveModule('pdf')}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl transition-all group text-left relative overflow-hidden ${activeModule === 'pdf' ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'hover:bg-slate-50 text-slate-500'}`}
-                    >
-                        <div className={`p-2 rounded-lg ${activeModule === 'pdf' ? 'bg-white/20' : 'bg-blue-50 text-blue-600 group-hover:bg-white'}`}>
-                            <FileText className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <span className="block text-sm font-bold">PDF Extractor AI</span>
-                            <span className={`text-[10px] ${activeModule === 'pdf' ? 'text-blue-200' : 'text-slate-400'}`}>OCR & Convert</span>
-                        </div>
-                        {activeModule === 'pdf' && <div className="absolute right-0 top-0 bottom-0 w-1 bg-white/20"></div>}
-                    </button>
-                </div>
-
-                {/* Footer User Info */}
-                <div className="p-4 border-t border-slate-100 bg-slate-50/50">
-                    <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm mb-3">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Tài khoản</p>
-                        <p className="text-xs font-bold text-slate-700 truncate">{currentUser.email}</p>
+                {/* 3. USER & LOGOUT (RIGHT) */}
+                <div className="flex items-center gap-3 min-w-fit pl-4 border-l border-slate-100">
+                    <div className="hidden md:flex flex-col items-end">
+                        <span className="text-xs font-bold text-slate-700">{currentUser.email?.split('@')[0]}</span>
+                        <span className="text-[10px] text-slate-400 font-medium">Pro Plan</span>
                     </div>
                     <button 
                         onClick={() => logout()}
-                        className="w-full flex items-center justify-center gap-2 py-3 text-xs font-bold uppercase text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        title="Đăng xuất"
                     >
-                        <LogOut className="w-4 h-4" /> Đăng Xuất
+                        <LogOut className="w-5 h-5" />
                     </button>
                 </div>
-            </div>
+            </header>
+
+            {/* MAIN CONTENT AREA */}
+            <main className="flex-1 pt-20 px-4 md:px-6 pb-10 w-full max-w-[1920px] mx-auto animate-in fade-in duration-300">
+                {activeModule === 'scraper' && <ScraperTool />}
+                {activeModule === 'gmv' && <GmvComparator />}
+                {activeModule === 'video' && <VideoAnalytics />}
+                {activeModule === 'pdf' && <PdfExtractor />}
+                {activeModule === 'price' && <PriceComparator />}
+            </main>
+
         </div>
     );
 };
