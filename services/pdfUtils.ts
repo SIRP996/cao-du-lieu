@@ -2,14 +2,13 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { jsPDF } from 'jspdf';
 
-// Define the worker source. 
-// We use unpkg to fetch the exact version matching the library.
-// We use the .mjs extension to ensure it is loaded as an ES module.
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`;
+// Sử dụng CDN cho worker để đảm bảo phiên bản khớp với thư viện chính (được load qua importmap trong index.html)
+// Điều này sửa lỗi "Invalid URL" và lỗi "Version Mismatch" khi chạy trên môi trường có importmap.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 export interface PdfPageData {
   pageNumber: number;
-  imageData: string; // Base64 encoded image
+  imageData: string;
 }
 
 export const loadPdf = async (file: File): Promise<pdfjsLib.PDFDocumentProxy> => {
@@ -39,19 +38,16 @@ export const renderPageToImage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNumb
 
   await page.render(renderContext as any).promise;
   
-  // Convert to JPEG for better compression/token usage with Gemini
   return canvas.toDataURL('image/jpeg', 0.8);
 };
 
-// New function to convert images to PDF
 export const createPdfFromImages = async (imageFiles: File[]): Promise<File> => {
   const doc = new jsPDF({
     orientation: 'p',
     unit: 'px',
-    format: 'a4', // Initial format, will change per page
+    format: 'a4',
   });
 
-  // Delete the initial default page so we can add pages with correct dimensions
   doc.deletePage(1);
 
   for (const file of imageFiles) {
@@ -63,11 +59,7 @@ export const createPdfFromImages = async (imageFiles: File[]): Promise<File> => 
         img.onload = () => {
           const width = img.width;
           const height = img.height;
-          
-          // Add a new page with the exact dimensions of the image
           doc.addPage([width, height], width > height ? 'landscape' : 'portrait');
-          
-          // Add image to the full page
           doc.addImage(img.src, 'JPEG', 0, 0, width, height);
           resolve();
         };

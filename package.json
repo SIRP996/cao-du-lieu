@@ -19,7 +19,7 @@
     "clsx": "^2.1.0",
     "tailwind-merge": "^2.2.0",
     "jspdf": "^2.5.1",
-    "pdfjs-dist": "^4.0.379"
+    "pdfjs-dist": "4.0.379"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
