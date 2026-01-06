@@ -2,9 +2,9 @@
 import { GoogleGenAI } from "@google/genai";
 
 // DANH SÁCH MODEL ƯU TIÊN (FALLBACK STRATEGY)
-// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, nhưng là bản thử nghiệm (có thể không ổn định).
-// 2. gemini-1.5-flash: Bản ổn định, hỗ trợ Vision tốt, ít bị lỗi 503.
-const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-1.5-flash'];
+// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, nhưng là bản thử nghiệm.
+// 2. gemini-3-flash-preview: Bản chuẩn mới nhất (Thay thế cho 1.5 đã cũ).
+const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-3-flash-preview'];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -128,12 +128,14 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
                 msg.includes('quota') || 
                 msg.includes('check your API key');
 
+            // Các lỗi liên quan đến Model không tìm thấy hoặc server quá tải
             const isModelError = 
+                msg.includes('404') || 
+                msg.includes('not found') || 
+                msg.includes('not supported') ||
                 msg.includes('503') || 
                 msg.includes('500') || 
-                msg.includes('overloaded') ||
-                msg.includes('not found') || 
-                msg.includes('not supported');
+                msg.includes('overloaded');
 
             if (msg.includes("MISSING_API_KEY")) {
                  return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
@@ -150,12 +152,12 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
                  }
             }
             
-            // Nếu lỗi Model (503, not supported) -> Break vòng lặp con để chuyển sang Model tiếp theo
+            // Nếu lỗi Model (404, 503...) -> Break vòng lặp con để chuyển ngay sang Model tiếp theo trong danh sách
             if (isModelError) {
                 break; 
             }
             
-            // Nếu lỗi khác, thử lại 1 lần rồi chuyển model
+            // Nếu lỗi khác (mạng chập chờn...), thử lại 1 lần rồi chuyển model
             await new Promise(r => setTimeout(r, 1500));
         }
       }
