@@ -395,7 +395,7 @@ export const searchLocalStoresWithGemini = async (
   location: string
 ): Promise<StoreResult[]> => {
   const ai = getAIClient();
-  const model = "gemini-2.5-flash"; 
+  const model = "gemini-2.5-flash-preview"; 
   
   const prompt = `
     Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.

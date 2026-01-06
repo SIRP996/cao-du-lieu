@@ -2,10 +2,10 @@
 import { GoogleGenAI } from "@google/genai";
 
 // DANH SÁCH MODEL ƯU TIÊN (FALLBACK STRATEGY)
-// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, OCR rất tốt.
-// 2. gemini-2.0-pro-exp-02-05: Model Pro mới, thông minh hơn cho bảng phức tạp (nếu Flash thất bại).
-// 3. gemini-1.5-flash: Bản ổn định cũ (Fallback cuối).
-const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-1.5-flash'];
+// 1. gemini-2.0-flash-exp: Tốc độ cao nhất, OCR cực tốt.
+// 2. gemini-2.5-flash-preview: Bản ổn định mới nhất.
+// 3. gemini-1.5-flash-latest: Bản 1.5 mới nhất (thay cho 'gemini-1.5-flash' bị lỗi 404).
+const MODELS_TO_TRY = ['gemini-2.0-flash-exp', 'gemini-2.5-flash-preview', 'gemini-1.5-flash-latest'];
 
 // --- KEY MANAGEMENT SYSTEM ---
 
@@ -130,9 +130,8 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
             return text; // THÀNH CÔNG -> Trả về ngay
 
         } catch (error: any) {
-            console.warn(`PDF Extract Error (${modelName} - Try ${i+1}):`, error);
-            
             const msg = String(error.message || error);
+            console.warn(`PDF Extract Error (${modelName} - Try ${i+1}):`, msg);
             lastErrorMsg = msg;
 
             // Phân loại lỗi
@@ -184,6 +183,6 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
         ${lastErrorMsg.substring(0, 300)}
       </div>
       <br/>
-      <i>Gợi ý: Kiểm tra lại API Key hoặc kết nối mạng.</i>
+      <i>Gợi ý: Kiểm tra lại API Key, kết nối mạng hoặc thử lại.</i>
   </div>`;
 };
