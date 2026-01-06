@@ -1,11 +1,11 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-// SỬ DỤNG MODEL FLASH ĐỂ TRÁNH TIMEOUT TRÊN VERCEL (Gói Hobby giới hạn 10s)
-// gemini-2.0-flash-exp xử lý Vision cực nhanh (<3s) so với Pro (>15s)
+// SỬ DỤNG MODEL FLASH ĐỂ TRÁNH TIMEOUT TRÊN VERCEL
+// gemini-2.0-flash-exp là model nhanh nhất hiện tại cho tác vụ Vision (OCR)
 const MODEL_NAME = 'gemini-2.0-flash-exp';
 
-// --- KEY MANAGEMENT SYSTEM (Đồng bộ logic với geminiScraper.ts) ---
+// --- KEY MANAGEMENT SYSTEM ---
 
 let currentKeyIndex = 0;
 let keyList: string[] = [];
@@ -17,7 +17,6 @@ const getKeys = (): string[] => {
       if (localKey && localKey.length > 10) {
           const rawKeys = localKey.split(/[,\n]+/).map(k => k.trim()).filter(k => k.length > 10);
           if (rawKeys.length > 0) {
-              // Nếu danh sách key thay đổi, reset lại cache
               if (JSON.stringify(rawKeys) !== JSON.stringify(keyList)) {
                   keyList = rawKeys;
                   currentKeyIndex = 0;
@@ -36,7 +35,8 @@ const getKeys = (): string[] => {
   return keys;
 };
 
-const getAIClient = () => {
+// Hàm lấy Client mới với key hiện tại (luôn gọi lại hàm này mỗi lần request)
+const createAIClient = () => {
     const keys = getKeys();
     if (keys.length === 0) throw new Error("MISSING_API_KEY");
     
@@ -44,6 +44,7 @@ const getAIClient = () => {
     const keyIndex = currentKeyIndex % keys.length;
     const key = keys[keyIndex];
     
+    // console.log(`Using Key [${keyIndex}]: ...${key.slice(-4)}`);
     return new GoogleGenAI({ apiKey: key });
 };
 
@@ -61,11 +62,12 @@ const rotateKey = (): boolean => {
 
 export const analyzePdfPage = async (base64Image: string, targetLanguage?: string): Promise<string> => {
   let attempts = 0;
-  const maxAttempts = 3; // Thử tối đa 3 key khác nhau
+  const maxAttempts = 3; // Thử tối đa 3 lần
 
   while (attempts < maxAttempts) {
     try {
-        const ai = getAIClient();
+        attempts++;
+        const ai = createAIClient();
         
         let taskDescription = "Trích xuất TOÀN BỘ văn bản trong hình.";
         if (targetLanguage) {
@@ -92,7 +94,6 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
             ]
           },
           config: {
-            // Giới hạn token để phản hồi nhanh hơn
             maxOutputTokens: 8000, 
             temperature: 0.1, 
           }
@@ -107,8 +108,7 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
         return text;
 
     } catch (error: any) {
-        attempts++;
-        console.warn(`PDF Extract Error (Attempt ${attempts}):`, error);
+        console.warn(`PDF Extract Error (Attempt ${attempts}/${maxAttempts}):`, error);
         
         const msg = String(error.message || error);
         
@@ -118,28 +118,51 @@ export const analyzePdfPage = async (base64Image: string, targetLanguage?: strin
             msg.includes('400') || 
             msg.includes('API key') || 
             msg.includes('quota') ||
-            msg.includes('RESOURCE_EXHAUSTED');
+            msg.includes('RESOURCE_EXHAUSTED') ||
+            msg.includes('fetch failed') || // Mạng lỗi cũng nên đổi key/thử lại
+            msg.includes('Load failed');
 
+        // Logic Retry
+        let shouldRetry = false;
+        
+        // Nếu lỗi Key -> Xoay Key -> Retry
         if (isKeyError) {
-            // Nếu còn key khác, xoay vòng và thử lại
-            if (rotateKey()) {
-                await new Promise(r => setTimeout(r, 1000)); // Đợi 1s trước khi thử lại
-                continue;
-            }
+             if (rotateKey()) {
+                 shouldRetry = true;
+             } else {
+                 // Nếu chỉ có 1 key mà lỗi 429/mạng -> Retry luôn với key đó (hy vọng mạng ổn)
+                 shouldRetry = true; 
+             }
+        } else {
+            // Lỗi khác (Server error 500, 503...) -> Cũng retry
+             shouldRetry = true;
+        }
+
+        // Nếu còn lượt thử và quyết định retry
+        if (shouldRetry && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1500)); // Đợi 1.5s
+            continue; // Quay lại đầu vòng lặp
         }
         
-        // Nếu đã hết lượt thử hoặc lỗi không phải do key
-        if (attempts >= maxAttempts) {
-            if (msg.includes("MISSING_API_KEY")) {
-                 return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
-                    Lỗi: Chưa cấu hình API Key.<br/>
-                    Vui lòng bấm nút <b>KEY</b> ở góc trên bên phải để nhập API Key.
-                </div>`;
-            }
-            return `<div class="text-red-500 font-bold">Lỗi trích xuất: ${msg.substring(0, 100)}... (Vui lòng thử lại hoặc giảm dung lượng ảnh)</div>`;
+        // --- NẾU KHÔNG RETRY ĐƯỢC NỮA -> TRẢ VỀ LỖI ---
+        
+        if (msg.includes("MISSING_API_KEY")) {
+             return `<div class="text-red-500 font-bold p-4 border border-red-200 bg-red-50 rounded">
+                Lỗi: Chưa cấu hình API Key.<br/>
+                Vui lòng bấm nút <b>KEY</b> ở góc trên bên phải để nhập API Key.
+            </div>`;
         }
+
+        // Trả về lỗi chi tiết thay vì chuỗi chung chung
+        return `<div class="p-4 bg-red-50 border border-red-100 rounded text-sm text-red-600">
+            <strong>Lỗi trích xuất (Thử ${attempts}/${maxAttempts}):</strong><br/>
+            ${msg.substring(0, 150)}...
+            <br/><br/>
+            <i>Gợi ý: Thử lại hoặc giảm dung lượng ảnh/PDF.</i>
+        </div>`;
     }
   }
 
-  return "<p><i>(Lỗi kết nối không xác định)</i></p>";
+  // Fallback cuối cùng nếu vòng lặp thoát bất thường (hiếm khi xảy ra với logic trên)
+  return "<p><i>(Lỗi kết nối: Đã hết lượt thử lại)</i></p>";
 };
