@@ -389,20 +389,19 @@ export const parseRawProducts = async (
   return [];
 };
 
-// FIXED: Thêm tham số _retries để ngăn chặn vòng lặp vô tận
+// FIXED: Thêm timeout và xử lý lỗi chặt chẽ hơn
 export const searchLocalStoresWithGemini = async (
   productName: string,
   location: string,
   _retries = 0
 ): Promise<StoreResult[]> => {
-  // GUARD: Chỉ cho phép retry tối đa 3 lần
-  if (_retries > 3) {
+  // GUARD: Chỉ cho phép retry tối đa 1 lần để tránh treo
+  if (_retries > 1) {
       console.error("Gemini Search: Max retries exceeded.");
       return [];
   }
 
   const ai = getAIClient();
-  // QUAN TRỌNG: Sử dụng model 2.0-flash-exp vì khả năng Google Grounding & JSON output ổn định hơn bản 3.0 Preview cho task này
   const model = "gemini-2.0-flash-exp"; 
   
   const prompt = `
@@ -425,29 +424,34 @@ export const searchLocalStoresWithGemini = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    // TIMEOUT: Tự động ngắt sau 30 giây nếu AI không phản hồi
+    const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Timeout: AI took too long to search.")), 30000)
+    );
+
+    const apiPromise = ai.models.generateContent({
       model: model,
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
-        // Không set responseMimeType JSON ở đây vì Google Search tool đôi khi trả về text + metadata
+        tools: [{ googleSearch: {} }]
       }
     });
 
+    // Race between API call and timeout
+    const response = await Promise.race([apiPromise, timeoutPromise]) as any;
+
     let text = response.text || "[]";
     
-    // CLEANING: Loại bỏ markdown code blocks ```json ... ```
+    // CLEANING
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     
-    // Tìm mảng JSON bắt đầu bằng [ và kết thúc bằng ]
     const startIdx = text.indexOf('[');
     const endIdx = text.lastIndexOf(']');
     
     if (startIdx !== -1 && endIdx !== -1) {
         text = text.substring(startIdx, endIdx + 1);
     } else {
-        // Fallback: Nếu không tìm thấy [], trả về rỗng để tránh crash
-        console.warn("Gemini Search: No JSON array found in response.");
+        // Fallback: Return empty if no array found
         return [];
     }
 
@@ -461,17 +465,22 @@ export const searchLocalStoresWithGemini = async (
         }));
     } catch (e) {
         console.error("JSON Parse Error form Search:", e);
-        console.log("Raw Text:", text);
         return [];
     }
 
   } catch (error: any) {
-     console.error("Search API Error:", error);
-     // FIX: Truyền biến đếm retry tăng lên mỗi lần thử lại
-     if (rotateKey()) {
-         return searchLocalStoresWithGemini(productName, location, _retries + 1);
+     const msg = String(error.message || error);
+     console.error("Search API Error:", msg);
+     
+     // Chỉ retry nếu là lỗi Key/Quota hoặc Timeout, không retry nếu lỗi cú pháp
+     if (msg.includes("Timeout") || msg.includes("429") || msg.includes("400")) {
+         if (rotateKey()) {
+             return searchLocalStoresWithGemini(productName, location, _retries + 1);
+         }
      }
-     throw error;
+     
+     // Return empty array instead of crashing UI
+     return [];
   }
 };
 
