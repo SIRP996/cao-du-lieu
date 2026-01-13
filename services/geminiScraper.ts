@@ -394,13 +394,26 @@ export const searchLocalStoresWithGemini = async (
   location: string
 ): Promise<StoreResult[]> => {
   const ai = getAIClient();
-  // UPGRADE: Use the new standard model
-  const model = "gemini-3-flash-preview"; 
+  // QUAN TRỌNG: Sử dụng model 2.0-flash-exp vì khả năng Google Grounding & JSON output ổn định hơn bản 3.0 Preview cho task này
+  const model = "gemini-2.0-flash-exp"; 
   
   const prompt = `
-    Bạn là một trợ lý tìm kiếm cửa hàng địa phương thông minh.
-    Nhiệm vụ: Tìm các cửa hàng bán "${productName}" ở khu vực "${location}".
-    Trả về JSON Array: [{storeName, address, priceEstimate, link, phone, email, isOpen}]
+    CONTEXT: User wants to find where to buy "${productName}" in "${location}".
+    TASK: Use Google Search to find 5-10 real local stores/retailers.
+    
+    OUTPUT FORMAT:
+    Return a valid JSON Array ONLY. Do not output markdown code blocks.
+    [
+      {
+        "storeName": "Store Name",
+        "address": "Full Address",
+        "priceEstimate": "Price found or 'Liên hệ'",
+        "link": "URL found",
+        "phone": "Phone number",
+        "email": "Email if available",
+        "isOpen": "Opening hours"
+      }
+    ]
   `;
 
   try {
@@ -409,21 +422,38 @@ export const searchLocalStoresWithGemini = async (
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
+        // Không set responseMimeType JSON ở đây vì Google Search tool đôi khi trả về text + metadata
       }
     });
 
-    const text = response.text || "[]";
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    const cleanJson = jsonMatch ? jsonMatch[0] : "[]";
+    let text = response.text || "[]";
     
+    // CLEANING: Loại bỏ markdown code blocks ```json ... ```
+    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    // Tìm mảng JSON bắt đầu bằng [ và kết thúc bằng ]
+    const startIdx = text.indexOf('[');
+    const endIdx = text.lastIndexOf(']');
+    
+    if (startIdx !== -1 && endIdx !== -1) {
+        text = text.substring(startIdx, endIdx + 1);
+    } else {
+        // Fallback: Nếu không tìm thấy [], thử ép kiểu mảng rỗng
+        console.warn("Gemini Search: No JSON array found in response.");
+        return [];
+    }
+
     try {
-        const data = JSON.parse(cleanJson);
+        const data = JSON.parse(text);
+        if (!Array.isArray(data)) return [];
+
         return data.map((item: any, idx: number) => ({
             id: `store_${idx}_${Math.random().toString(36).substr(2,5)}`,
             ...item
         }));
     } catch (e) {
         console.error("JSON Parse Error form Search:", e);
+        console.log("Raw Text:", text);
         return [];
     }
 
@@ -431,6 +461,7 @@ export const searchLocalStoresWithGemini = async (
      if (rotateKey()) {
          return searchLocalStoresWithGemini(productName, location);
      }
+     console.error("Search API Error:", error);
      throw error;
   }
 };
