@@ -389,10 +389,18 @@ export const parseRawProducts = async (
   return [];
 };
 
+// FIXED: Thêm tham số _retries để ngăn chặn vòng lặp vô tận
 export const searchLocalStoresWithGemini = async (
   productName: string,
-  location: string
+  location: string,
+  _retries = 0
 ): Promise<StoreResult[]> => {
+  // GUARD: Chỉ cho phép retry tối đa 3 lần
+  if (_retries > 3) {
+      console.error("Gemini Search: Max retries exceeded.");
+      return [];
+  }
+
   const ai = getAIClient();
   // QUAN TRỌNG: Sử dụng model 2.0-flash-exp vì khả năng Google Grounding & JSON output ổn định hơn bản 3.0 Preview cho task này
   const model = "gemini-2.0-flash-exp"; 
@@ -438,7 +446,7 @@ export const searchLocalStoresWithGemini = async (
     if (startIdx !== -1 && endIdx !== -1) {
         text = text.substring(startIdx, endIdx + 1);
     } else {
-        // Fallback: Nếu không tìm thấy [], thử ép kiểu mảng rỗng
+        // Fallback: Nếu không tìm thấy [], trả về rỗng để tránh crash
         console.warn("Gemini Search: No JSON array found in response.");
         return [];
     }
@@ -458,10 +466,11 @@ export const searchLocalStoresWithGemini = async (
     }
 
   } catch (error: any) {
-     if (rotateKey()) {
-         return searchLocalStoresWithGemini(productName, location);
-     }
      console.error("Search API Error:", error);
+     // FIX: Truyền biến đếm retry tăng lên mỗi lần thử lại
+     if (rotateKey()) {
+         return searchLocalStoresWithGemini(productName, location, _retries + 1);
+     }
      throw error;
   }
 };
