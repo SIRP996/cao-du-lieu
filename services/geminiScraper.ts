@@ -389,27 +389,33 @@ export const parseRawProducts = async (
   return [];
 };
 
-// FIXED: Thêm timeout và xử lý lỗi chặt chẽ hơn
+// FIXED: Timeout tăng lên 45s, thêm Fallback Model, Force JSON Output
 export const searchLocalStoresWithGemini = async (
   productName: string,
   location: string,
   _retries = 0
 ): Promise<StoreResult[]> => {
-  // GUARD: Chỉ cho phép retry tối đa 1 lần để tránh treo
-  if (_retries > 1) {
+  // GUARD: Max retry 2 lần (3 attempts total)
+  if (_retries > 2) {
       console.error("Gemini Search: Max retries exceeded.");
       return [];
   }
 
+  // LOGIC XOAY VÒNG MODEL:
+  // Lần 0: Dùng 2.0-flash-exp (tốt nhất cho Search)
+  // Lần 1: Dùng 1.5-flash (ổn định hơn nếu 2.0 lỗi)
+  // Lần 2: Quay lại 2.0
+  const models = ["gemini-2.0-flash-exp", "gemini-1.5-flash"];
+  const model = models[_retries % models.length];
+
   const ai = getAIClient();
-  const model = "gemini-2.0-flash-exp"; 
   
   const prompt = `
     CONTEXT: User wants to find where to buy "${productName}" in "${location}".
     TASK: Use Google Search to find 5-10 real local stores/retailers.
     
     OUTPUT FORMAT:
-    Return a valid JSON Array ONLY. Do not output markdown code blocks.
+    Return a valid JSON Array ONLY. 
     [
       {
         "storeName": "Store Name",
@@ -424,37 +430,24 @@ export const searchLocalStoresWithGemini = async (
   `;
 
   try {
-    // TIMEOUT: Tự động ngắt sau 30 giây nếu AI không phản hồi
+    // TIMEOUT: Tăng lên 45 giây cho Search Grounding
     const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout: AI took too long to search.")), 30000)
+        setTimeout(() => reject(new Error("Timeout: AI took too long to search.")), 45000)
     );
 
     const apiPromise = ai.models.generateContent({
       model: model,
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }]
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json" // QUAN TRỌNG: Force JSON để tránh lỗi parsing
       }
     });
 
-    // Race between API call and timeout
     const response = await Promise.race([apiPromise, timeoutPromise]) as any;
 
     let text = response.text || "[]";
     
-    // CLEANING
-    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    const startIdx = text.indexOf('[');
-    const endIdx = text.lastIndexOf(']');
-    
-    if (startIdx !== -1 && endIdx !== -1) {
-        text = text.substring(startIdx, endIdx + 1);
-    } else {
-        // Fallback: Return empty if no array found
-        return [];
-    }
-
     try {
         const data = JSON.parse(text);
         if (!Array.isArray(data)) return [];
@@ -465,21 +458,20 @@ export const searchLocalStoresWithGemini = async (
         }));
     } catch (e) {
         console.error("JSON Parse Error form Search:", e);
-        return [];
+        // Nếu lỗi JSON dù đã force, retry với model khác
+        throw new Error("Invalid JSON response");
     }
 
   } catch (error: any) {
      const msg = String(error.message || error);
-     console.error("Search API Error:", msg);
+     console.error(`Search API Error (${model}):`, msg);
      
-     // Chỉ retry nếu là lỗi Key/Quota hoặc Timeout, không retry nếu lỗi cú pháp
-     if (msg.includes("Timeout") || msg.includes("429") || msg.includes("400")) {
-         if (rotateKey()) {
-             return searchLocalStoresWithGemini(productName, location, _retries + 1);
-         }
+     // Rotate key và Retry (đổi model)
+     if (rotateKey() || _retries < 2) {
+         await delay(1500);
+         return searchLocalStoresWithGemini(productName, location, _retries + 1);
      }
      
-     // Return empty array instead of crashing UI
      return [];
   }
 };
@@ -503,7 +495,7 @@ export const processNormalization = async (
   } else {
     const BATCH_SIZE = 10;
     const results: ProductData[] = [...items];
-    const model = "gemini-3-flash-preview"; // UPGRADE
+    const model = "gemini-3-flash-preview"; 
 
     for (let i = 0; i < total; i += BATCH_SIZE) {
       const batch = results.slice(i, i + BATCH_SIZE);
