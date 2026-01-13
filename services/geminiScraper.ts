@@ -303,7 +303,6 @@ export const parseRawProducts = async (
   htmlHint: string, 
   sourceIndex: number
 ): Promise<Partial<ProductData>[]> => {
-  // UPGRADE: Use the new standard model for JSON extraction tasks
   const model = "gemini-3-flash-preview";
   const cleanHtmlInput = preProcessHtml(htmlHint);
   
@@ -389,50 +388,51 @@ export const parseRawProducts = async (
   return [];
 };
 
-// FIXED: Timeout tăng lên 45s, thêm Fallback Model, Force JSON Output
+// --- SEARCH STORE IMPROVED ---
+// 1. Dùng model ổn định (1.5 Flash) thay vì experimental
+// 2. Không dùng responseMimeType: 'application/json' để tránh conflict với Tools
+// 3. Prompt Engineering để lấy JSON từ kết quả text
 export const searchLocalStoresWithGemini = async (
   productName: string,
   location: string,
   _retries = 0
 ): Promise<StoreResult[]> => {
-  // GUARD: Max retry 2 lần (3 attempts total)
   if (_retries > 2) {
       console.error("Gemini Search: Max retries exceeded.");
       return [];
   }
 
-  // LOGIC XOAY VÒNG MODEL:
-  // Lần 0: Dùng 2.0-flash-exp (tốt nhất cho Search)
-  // Lần 1: Dùng 1.5-flash (ổn định hơn nếu 2.0 lỗi)
-  // Lần 2: Quay lại 2.0
-  const models = ["gemini-2.0-flash-exp", "gemini-1.5-flash"];
+  // Model fallback strategy: 1.5 Flash -> 1.5 Pro
+  const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
   const model = models[_retries % models.length];
 
   const ai = getAIClient();
   
   const prompt = `
-    CONTEXT: User wants to find where to buy "${productName}" in "${location}".
-    TASK: Use Google Search to find 5-10 real local stores/retailers.
+    Find 5-10 REAL retail stores/pharmacies selling "${productName}" in "${location}" using Google Search.
     
-    OUTPUT FORMAT:
-    Return a valid JSON Array ONLY. 
+    CRITICAL:
+    1. Use the googleSearch tool to find CURRENT info.
+    2. Output MUST be a valid JSON array inside a markdown block: \`\`\`json [ ... ] \`\`\`.
+    3. Do NOT include explanations. Only the JSON.
+    
+    JSON Format:
     [
       {
-        "storeName": "Store Name",
+        "storeName": "Name",
         "address": "Full Address",
-        "priceEstimate": "Price found or 'Liên hệ'",
-        "link": "URL found",
-        "phone": "Phone number",
-        "email": "Email if available",
-        "isOpen": "Opening hours"
+        "priceEstimate": "Price (e.g. 150.000đ) or 'Liên hệ'",
+        "link": "URL",
+        "phone": "Phone",
+        "email": "Email",
+        "isOpen": "Hours"
       }
     ]
   `;
 
   try {
-    // TIMEOUT: Tăng lên 45 giây cho Search Grounding
     const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Timeout: AI took too long to search.")), 45000)
+        setTimeout(() => reject(new Error("Timeout: AI search took too long")), 45000)
     );
 
     const apiPromise = ai.models.generateContent({
@@ -440,14 +440,27 @@ export const searchLocalStoresWithGemini = async (
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json" // QUAN TRỌNG: Force JSON để tránh lỗi parsing
+        // IMPORTANT: DO NOT set responseMimeType to 'application/json' when using googleSearch.
+        // It causes conflict on some models/environments. We parse the text manually.
       }
     });
 
     const response = await Promise.race([apiPromise, timeoutPromise]) as any;
-
-    let text = response.text || "[]";
+    let text = response.text || "";
     
+    // Extract JSON from Markdown block
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+    if (match) {
+        text = match[1];
+    } else {
+        // Fallback: Try to find array bracket
+        const start = text.indexOf('[');
+        const end = text.lastIndexOf(']');
+        if (start !== -1 && end !== -1) {
+            text = text.substring(start, end + 1);
+        }
+    }
+
     try {
         const data = JSON.parse(text);
         if (!Array.isArray(data)) return [];
@@ -457,21 +470,19 @@ export const searchLocalStoresWithGemini = async (
             ...item
         }));
     } catch (e) {
-        console.error("JSON Parse Error form Search:", e);
-        // Nếu lỗi JSON dù đã force, retry với model khác
-        throw new Error("Invalid JSON response");
+        console.error(`JSON Parse Error (${model}):`, e);
+        // Nếu lỗi parse, retry với model khác
+        throw new Error("Invalid JSON from model");
     }
 
   } catch (error: any) {
      const msg = String(error.message || error);
      console.error(`Search API Error (${model}):`, msg);
      
-     // Rotate key và Retry (đổi model)
      if (rotateKey() || _retries < 2) {
-         await delay(1500);
+         await delay(2000);
          return searchLocalStoresWithGemini(productName, location, _retries + 1);
      }
-     
      return [];
   }
 };
